@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  pipeline:
+    build: .
+    container_name: pipeline
+    working_dir: /app
+    volumes:
+      - ./source:/app/source:ro
+      - ./data:/app/data:rw
+      - ./pipeline:/app/pipeline:rw
+    env_file: .env
+    environment:
+      - DBT_PROFILES_DIR=/app/dbt
+    command: python pipeline/pipeline.py

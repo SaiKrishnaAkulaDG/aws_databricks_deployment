@@ -1,0 +1,6 @@
+models:
+  - name: silver_transaction_codes
+  - name: silver_accounts
+  - name: silver_transactions
+  - name: gold_daily_summary
+  - name: gold_weekly_account_summary

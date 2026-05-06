@@ -1,0 +1,7 @@
+credit_card_lake:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: /app/data/lake.duckdb
+      extensions: [parquet]
