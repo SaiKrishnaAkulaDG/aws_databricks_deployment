@@ -12,10 +12,11 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ EC2 Instance (Ubuntu 22.04 LTS)                         │
-│ Instance Type: t3.small (2 vCPU, 2GB RAM)               │
-│ Instance ID: i-04f06fafc31884a06                        │
+│ Instance Type: t3.micro (2 vCPU, 1GB RAM)               │
+│ Instance ID: <get from CloudFormation outputs>          │
 │ Public IP: <dynamic — get from CloudFormation outputs>  │
-│ Storage: 20GB gp3 EBS                                   │
+│ Storage: 5GB gp3 EBS                                    │
+│ ⚠ Stop instance after pipeline run to avoid idle costs  │
 ├─────────────────────────────────────────────────────────┤
 │ Software Stack:                                         │
 │ ├─ OS: Ubuntu 22.04.5 LTS                              │
@@ -29,11 +30,12 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Why t3.small?**
+**Why t3.micro?**
 - 2 vCPU sufficient for sequential pipeline execution
-- 2GB RAM adequate for DuckDB + dbt transforms on 6 days of sample data
-- Cost: ~$0.022/hour + $0.004/hour EBS = $0.79/day
-- Storage: 20GB covers ~2 weeks of transaction data at current volume
+- 1GB RAM adequate for DuckDB + dbt transforms on 7 days of sample data
+- Cost: ~$0.0104/hour + <$0.001/hour EBS (5GB) = ~$0.26/day when running
+- **Key cost saving: stop the instance when pipeline is not running — pay only for active use**
+- Upgrade to t3.small only if memory exhaustion is observed during large backfills
 
 #### Layer 2: Storage (S3)
 ```
@@ -596,44 +598,44 @@ When new source data appears (e.g., transactions_2024-01-07.csv):
 
 #### Resource Utilization
 ```
-EC2 Instance: t3.small (2 vCPU, 2GB RAM, 20GB EBS)
+EC2 Instance: t3.micro (2 vCPU, 1GB RAM, 5GB EBS)
 
-Historical Load Test (6 days, 3 entities, ~40 records):
+Historical Load Test (7 days, 3 entities, ~40 records):
 
 Timeline:
-├─ Start: 12:47 UTC
+├─ Start pipeline
 ├─ Bronze loading: ~2 minutes
 ├─ Silver transformation: ~4 minutes
 ├─ Gold aggregation: ~1 minute
 ├─ Run log writes: ~1 minute
-├─ S3 sync: ~3 minutes (24 files)
-└─ End: 13:00 UTC
-├─ TOTAL: ~11 minutes
+├─ S3 sync: ~3 minutes
+└─ TOTAL: ~11 minutes active
 
 Resource Consumption:
 ├─ CPU: Peak 80%, Average 30%
-├─ Memory: Peak 45%, Average 20%
-├─ Disk: 50MB local, 0.09MB S3
+├─ Memory: Peak ~400MB (within 1GB limit)
+├─ Disk: ~50MB local (well within 5GB)
 ├─ Network: ~5 Mbps during S3 sync
 
-Bottlenecks: None observed
-├─ No timeouts
-├─ No memory exhaustion
-├─ No disk full errors
-└─ Adequate for current volume
+Cost (t3.micro, us-east-1):
+├─ Running: $0.0104/hour
+├─ Stopped: $0.0004/hour (EBS only)
+├─ 11-min pipeline run: ~$0.002
+├─ Idle 24h (stopped): ~$0.01/day
+└─ Full month stopped: ~$0.30
+
+⚠ STOP INSTANCE AFTER EACH RUN — do not leave it running idle.
 
 Scaling Considerations:
 For 30 days (5x current):
-├─ Estimated duration: ~1 hour
-├─ Memory needed: ~500MB (peak)
-├─ Disk needed: ~250MB local
-└─ Instance size adequate
+├─ t3.micro still adequate (~400MB peak)
+├─ Disk: ~250MB — still within 5GB
+└─ Upgrade EBS to 10GB if needed
 
 For 90 days (15x current):
-├─ Recommend: t3.medium (1 vCPU increase)
-├─ Estimated duration: ~3 hours
-├─ Memory needed: ~1.5GB (peak)
-└─ Cost impact: +$0.011/hour
+├─ Recommend: upgrade to t3.small (2GB RAM)
+├─ EBS: increase to 10-20GB via new CF stack
+└─ Cost impact: +$0.011/hour while running
 ```
 
 ---

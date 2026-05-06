@@ -78,8 +78,8 @@ aws cloudformation create-stack \
   --template-body file://cf-cc-transactions-lake.yaml \
   --parameters \
     ParameterKey=S3BucketName,ParameterValue=$S3_BUCKET_NAME \
-    ParameterKey=EC2InstanceType,ParameterValue=t3.small \
-    ParameterKey=EBSVolumeSize,ParameterValue=20 \
+    ParameterKey=EC2InstanceType,ParameterValue=t3.micro \
+    ParameterKey=EBSVolumeSize,ParameterValue=5 \
   --capabilities CAPABILITY_NAMED_IAM \
   --region $REGION
 
@@ -320,16 +320,34 @@ aws logs tail /aws/ec2/cc-transactions-lake --follow
 
 ## Step 7: Monitor and Maintain
 
-### Set Up Automated Pipeline Execution
-
-Create a cron job on the EC2 instance:
+### Stop Instance After Each Run (Cost Control)
 
 ```bash
-# Edit crontab
+# Stop the instance when pipeline is done — pay EBS-only rate (~$0.01/day) instead of compute
+INSTANCE_ID=$(aws cloudformation describe-stacks \
+  --stack-name $STACK_NAME \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+aws ec2 stop-instances --instance-ids $INSTANCE_ID --region $REGION
+
+# Start it again before the next run
+aws ec2 start-instances --instance-ids $INSTANCE_ID --region $REGION
+# Wait ~60s for instance to be ready, then SSH in
+```
+
+### Set Up Scheduled Pipeline Execution
+
+```bash
+# Add cron job on EC2 to run pipeline daily at 2 AM and stop instance after
 crontab -e
 
-# Add entry to run pipeline daily at 2 AM
-0 2 * * * /app/run_pipeline.sh >> /var/log/pipeline-exec.log 2>&1
+# Run pipeline then stop instance to minimise cost
+0 2 * * * docker compose -f /app/docker-compose.yml run --rm pipeline \
+  python -m pipeline.pipeline --mode incremental \
+  >> /var/log/pipeline-exec.log 2>&1 && \
+  aws ec2 stop-instances \
+  --instance-ids $(curl -s http://169.254.169.254/latest/meta-data/instance-id) \
+  --region us-east-1
 ```
 
 ### Monitor S3 Storage
@@ -445,10 +463,12 @@ ls -la /app/source/
 
 ## Performance Notes
 
-- **t3.small instance**: Suitable for 1-7 days of data processing
-- **Processing time**: ~5-10 minutes for 6 days of sample data
-- **Storage**: 20GB EBS sufficient for ~1-2 weeks of transaction data
-- **For larger datasets**: Scale up to t3.medium or t3.large
+- **t3.micro instance**: Suitable for 1-7 days of data processing (1GB RAM, ~400MB peak usage)
+- **Processing time**: ~10-15 minutes for 7 days of sample data
+- **Storage**: 5GB EBS sufficient for pipeline code + 7-day sample data (~50MB used)
+- **Cost**: ~$0.002 per pipeline run; ~$0.01/day when stopped (EBS only)
+- **⚠ Stop instance after each run** — do not leave it running idle
+- **For larger datasets**: Upgrade EBS to 10GB; upgrade to t3.small only if memory exhaustion occurs
 
 ## Security Best Practices
 

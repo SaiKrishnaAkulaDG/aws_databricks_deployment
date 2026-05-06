@@ -18,8 +18,8 @@ NC='\033[0m' # No Color
 # Configuration
 STACK_NAME="${STACK_NAME:-cc-transactions-lake-stack}"
 S3_BUCKET_NAME="${S3_BUCKET_NAME:-cc-transactions-lake-2026}"
-EC2_INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-t3.small}"
-EBS_VOLUME_SIZE="${EBS_VOLUME_SIZE:-20}"
+EC2_INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-t3.micro}"
+EBS_VOLUME_SIZE="${EBS_VOLUME_SIZE:-5}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="cf-cc-transactions-lake.yaml"
 LOG_FILE="deployment-$(date +%Y%m%d-%H%M%S).log"
@@ -268,6 +268,8 @@ SETUP_EOF
     echo "     ssh -i <your-key-pair.pem> ec2-user@$INSTANCE_IP" | tee -a "$LOG_FILE"
     echo "  3. Upload or clone the codebase to /app" | tee -a "$LOG_FILE"
     echo "  4. Run: docker compose run --rm pipeline python -m pipeline.pipeline --mode historical --start-date 2024-01-01 --end-date 2024-01-07" | tee -a "$LOG_FILE"
+    echo "  5. After pipeline finishes, STOP the instance to avoid idle charges:" | tee -a "$LOG_FILE"
+    echo "     aws ec2 stop-instances --instance-ids \$INSTANCE_ID --region $REGION" | tee -a "$LOG_FILE"
 }
 
 print_usage() {

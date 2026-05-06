@@ -9,20 +9,19 @@ Parameters:
   
   EC2InstanceType:
     Type: String
-    Default: t3.small
+    Default: t3.micro
     AllowedValues:
       - t3.micro
-      - t3.small
       - t2.micro
-      - t2.small
-    Description: EC2 instance type (minimal capacity)
-  
+      - t3.small
+    Description: EC2 instance type — use t3.micro (default) to minimise cost; start only when running pipeline
+
   EBSVolumeSize:
     Type: Number
-    Default: 20
-    MinValue: 20
-    MaxValue: 100
-    Description: EBS volume size in GB (minimal)
+    Default: 5
+    MinValue: 5
+    MaxValue: 20
+    Description: EBS volume size in GB — 5GB sufficient for pipeline code + 7-day sample data
 
   KeyName:
     Type: String
@@ -168,8 +167,9 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           mkdir -p /app
           cd /app
-          git clone https://github.com/SaiKrishnaAkulaDG/aws_deployment.git .
-          mkdir -p /app/{source,bronze,silver,gold,quarantine,pipeline,dbt,logs}
+          git clone https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git .
+          mkdir -p /app/source
+          mkdir -p /app/data/{bronze,silver,gold,pipeline}
           python3.10 -m pip install --upgrade pip
           python3.10 -m pip install -r requirements.txt
           echo "=== Ubuntu 22.04 LTS EC2 initialization completed ==="

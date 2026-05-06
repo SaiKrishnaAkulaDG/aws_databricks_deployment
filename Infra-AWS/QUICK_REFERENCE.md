@@ -286,20 +286,29 @@ aws cloudformation describe-stack-events \
   --output table
 ```
 
-### EC2 Instance Health
+### EC2 Instance — Start / Stop (Cost Control)
 
 ```bash
-# Get instance status
+# Get instance ID
+INSTANCE_ID=$(aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+
+# Start before a run
+aws ec2 start-instances --instance-ids $INSTANCE_ID
+
+# Stop after pipeline completes (saves ~96% vs leaving it running)
+aws ec2 stop-instances --instance-ids $INSTANCE_ID
+
+# Check status
 aws ec2 describe-instance-status \
-  --instance-ids i-xxxxx \
+  --instance-ids $INSTANCE_ID \
   --query 'InstanceStatuses[0].[InstanceStatus.Status,SystemStatus.Status]' \
   --output text
 
-# Check disk space
-ssh ubuntu@<IP> 'df -h'
-
-# Check memory
-ssh ubuntu@<IP> 'free -h'
+# Check disk space / memory (SSH in first)
+ssh ubuntu@<IP> 'df -h && free -h'
 ```
 
 ### S3 Storage Usage
@@ -406,12 +415,14 @@ EOF
 
 ## 📚 Configuration Parameters
 
-| Parameter | Default | Minimal | Recommended |
-|-----------|---------|---------|-------------|
-| Instance Type | t3.small | t3.micro | t3.small |
-| EBS Volume | 20GB | 20GB | 30GB |
-| S3 Bucket | cc-transactions-lake-2026 | - | global unique |
-| Region | us-east-1 | any | your closest |
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| Instance Type | t3.micro | Cheapest x86 — sufficient for 7-day sample data |
+| EBS Volume | 5GB | Sufficient for code + 7-day data (~50MB used) |
+| S3 Bucket | cc-transactions-lake-2026 | Must be globally unique |
+| Region | us-east-1 | Change to your closest region |
+
+> **Cost tip:** Stop the EC2 instance after each pipeline run. Running cost ~$0.0104/hr; stopped cost ~$0.0004/hr (EBS only). A single pipeline run costs ~$0.002.
 
 ---
 
