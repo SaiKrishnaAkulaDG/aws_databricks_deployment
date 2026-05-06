@@ -1,0 +1,230 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation Template for Credit Card Transactions Data Lake Pipeline on EC2'
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: cc-transactions-lake-2026
+    Description: S3 bucket name for data lake (must be globally unique)
+  
+  EC2InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t2.micro
+      - t2.small
+    Description: EC2 instance type (minimal capacity)
+  
+  EBSVolumeSize:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: EBS volume size in GB (minimal)
+
+  KeyName:
+    Type: String
+    Default: cc-transactions-lake-key
+    Description: EC2 Key Pair name for SSH access
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "S3 Configuration"
+        Parameters:
+          - S3BucketName
+      - Label:
+          default: "EC2 Configuration"
+        Parameters:
+          - EC2InstanceType
+          - EBSVolumeSize
+
+Resources:
+  # ============================================================================
+  # S3 Bucket with Data Lake Structure
+  # ============================================================================
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: cc-transactions-lake
+        - Key: Layer
+          Value: all
+
+  # ============================================================================
+  # IAM Role and Instance Profile for EC2
+  # ============================================================================
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cc-transactions-lake-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy'
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:DeleteObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${DataLakeBucket}'
+                  - !Sub 'arn:aws:s3:::${DataLakeBucket}/*'
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                Resource: 'arn:aws:logs:*:*:*'
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  # ============================================================================
+  # Security Group
+  # ============================================================================
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: cc-transactions-lake-sg
+      GroupDescription: Security group for CC transactions lake pipeline
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+      Tags:
+        - Key: Name
+          Value: cc-transactions-lake-sg
+
+  # ============================================================================
+  # EC2 Instance
+  # ============================================================================
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0ff290337e78c83bf
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      EbsOptimized: false
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref EBSVolumeSize
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: cc-transactions-lake-pipeline
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          exec > >(tee /var/log/user-data.log) 2>&1
+          echo "=== Ubuntu 22.04 LTS EC2 initialization ==="
+          apt-get update
+          apt-get install -y python3.10 python3.10-venv python3.10-dev python3-pip git docker.io build-essential
+          update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
+          systemctl start docker
+          systemctl enable docker
+          usermod -aG docker ubuntu
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          mkdir -p /app
+          cd /app
+          git clone https://github.com/SaiKrishnaAkulaDG/aws_deployment.git .
+          mkdir -p /app/{source,bronze,silver,gold,quarantine,pipeline,dbt,logs}
+          python3.10 -m pip install --upgrade pip
+          python3.10 -m pip install -r requirements.txt
+          echo "=== Ubuntu 22.04 LTS EC2 initialization completed ==="
+          date
+
+      Tags:
+        - Key: Application
+          Value: cc-transactions-lake
+
+  # ============================================================================
+  # CloudWatch Log Group
+  # ============================================================================
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/ec2/cc-transactions-lake
+      RetentionInDays: 7
+
+Outputs:
+  S3BucketName:
+    Description: Name of the S3 data lake bucket
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub 'cc-lake-bucket-${AWS::StackName}'
+
+  S3BucketArn:
+    Description: ARN of the S3 data lake bucket
+    Value: !GetAtt DataLakeBucket.Arn
+
+  BronzePath:
+    Description: S3 path for Bronze layer
+    Value: !Sub 's3://${DataLakeBucket}/bronze/'
+
+  SilverPath:
+    Description: S3 path for Silver layer
+    Value: !Sub 's3://${DataLakeBucket}/silver/'
+
+  GoldPath:
+    Description: S3 path for Gold layer
+    Value: !Sub 's3://${DataLakeBucket}/gold/'
+
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub 'cc-lake-instance-${AWS::StackName}'
+
+  EC2InstancePublicIP:
+    Description: Public IP address of EC2 instance
+    Value: !GetAtt EC2Instance.PublicIp
+
+  EC2RoleArn:
+    Description: IAM Role ARN for EC2 instance
+    Value: !GetAtt EC2Role.Arn
+
+  PipelineLogGroupName:
+    Description: CloudWatch Log Group for pipeline execution
+    Value: !Ref PipelineLogGroup
