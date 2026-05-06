@@ -20,6 +20,7 @@ STACK_NAME="${STACK_NAME:-cc-transactions-lake-stack}"
 S3_BUCKET_NAME="${S3_BUCKET_NAME:-cc-transactions-lake-2026}"
 EC2_INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-t3.micro}"
 EBS_VOLUME_SIZE="${EBS_VOLUME_SIZE:-5}"
+GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="cf-cc-transactions-lake.yaml"
 LOG_FILE="deployment-$(date +%Y%m%d-%H%M%S).log"
@@ -120,6 +121,7 @@ create_stack() {
             "ParameterKey=S3BucketName,ParameterValue=$S3_BUCKET_NAME" \
             "ParameterKey=EC2InstanceType,ParameterValue=$EC2_INSTANCE_TYPE" \
             "ParameterKey=EBSVolumeSize,ParameterValue=$EBS_VOLUME_SIZE" \
+            "ParameterKey=GitHubRepoURL,ParameterValue=$GITHUB_REPO_URL" \
         --capabilities CAPABILITY_NAMED_IAM \
         --region "$REGION" 2>&1 | tee -a "$LOG_FILE"
     
@@ -287,6 +289,7 @@ Environment Variables:
   S3_BUCKET_NAME       (default: cc-transactions-lake-2026)
   EC2_INSTANCE_TYPE    (default: t3.micro)
   EBS_VOLUME_SIZE      (default: 5)
+  GITHUB_REPO_URL      (default: https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git)
   AWS_REGION           (default: us-east-1)
 
 Examples:

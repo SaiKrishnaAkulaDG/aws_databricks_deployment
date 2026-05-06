@@ -23,6 +23,11 @@ Parameters:
     MaxValue: 20
     Description: EBS volume size in GB — 5GB sufficient for pipeline code + 7-day sample data
 
+  GitHubRepoURL:
+    Type: String
+    Default: https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git
+    Description: GitHub repository URL to clone onto EC2 at boot
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -35,6 +40,7 @@ Metadata:
         Parameters:
           - EC2InstanceType
           - EBSVolumeSize
+          - GitHubRepoURL
 
 Resources:
   # ============================================================================
@@ -156,7 +162,7 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           mkdir -p /app
           cd /app
-          git clone https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git .
+          git clone ${GitHubRepoURL} .
           mkdir -p /app/source
           mkdir -p /app/data/{bronze,silver,gold,pipeline}
           python3.10 -m pip install --upgrade pip
@@ -199,6 +205,10 @@ Outputs:
   GoldPath:
     Description: S3 path for Gold layer
     Value: !Sub 's3://${DataLakeBucket}/gold/'
+
+  PipelinePath:
+    Description: S3 path for pipeline control plane (control.parquet, run_log.parquet)
+    Value: !Sub 's3://${DataLakeBucket}/pipeline/'
 
   EC2InstanceId:
     Description: EC2 Instance ID
