@@ -40,7 +40,7 @@
 #### Layer 2: Storage (S3)
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ S3 Bucket: cc-transactions-lake-2026                    │
+│ S3 Bucket: cc-transaction-databricks-datalake-2026                    │
 │ Region: us-east-1                                       │
 │ Versioning: ENABLED (audit trail)                       │
 │ Block Public Access: ENABLED (security)                 │
@@ -79,8 +79,8 @@
 │ │  ├─ s3:PutObject                                      │
 │ │  ├─ s3:DeleteObject                                  │
 │ │  └─ s3:ListBucket                                    │
-│ │  Resources: arn:aws:s3:::cc-transactions-lake-2026   │
-│ │            arn:aws:s3:::cc-transactions-lake-2026/*   │
+│ │  Resources: arn:aws:s3:::cc-transaction-databricks-datalake-2026   │
+│ │            arn:aws:s3:::cc-transaction-databricks-datalake-2026/*   │
 │ │                                                       │
 │ ├─ CloudWatch Logs:                                    │
 │ │  ├─ logs:CreateLogGroup                              │
@@ -222,7 +222,7 @@ GOLD LAYER
              ▼
 S3 PERSISTENT STORAGE
 ┌─────────────────────────────────┐
-│ cc-transactions-lake-2026       │
+│ cc-transaction-databricks-datalake-2026       │
 │ ├─ bronze/   (synced from /app/data/bronze/)   │
 │ ├─ silver/   (synced from /app/data/silver/)   │
 │ ├─ gold/     (synced from /app/data/gold/)     │

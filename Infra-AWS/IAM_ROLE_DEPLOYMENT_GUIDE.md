@@ -37,7 +37,7 @@ After following this guide:
 | AWS profile name | `cc-lake-deployer` |
 | Region | `us-east-1` |
 | Stack name | `cc-transactions-lake-stack` |
-| S3 bucket | `cc-transactions-lake-2026` |
+| S3 bucket | `cc-transaction-databricks-datalake-2026` |
 
 ---
 
@@ -185,8 +185,8 @@ cat > /tmp/deployer-permissions.json << 'EOF'
         "s3:PutObject"
       ],
       "Resource": [
-        "arn:aws:s3:::cc-transactions-lake-2026",
-        "arn:aws:s3:::cc-transactions-lake-2026/*"
+        "arn:aws:s3:::cc-transaction-databricks-datalake-2026",
+        "arn:aws:s3:::cc-transaction-databricks-datalake-2026/*"
       ]
     },
     {

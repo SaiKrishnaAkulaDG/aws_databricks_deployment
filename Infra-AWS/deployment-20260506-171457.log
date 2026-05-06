@@ -1,0 +1,31 @@
+=== Deployment Log ===
+Started: Wed, May  6, 2026  5:14:57 PM
+Command: create
+
+[0;34m[INFO][0m Configuration:
+[0;34m[INFO][0m   Stack Name: cc-transactions-lake-stack
+[0;34m[INFO][0m   S3 Bucket: cc-transactions-lake-2026
+[0;34m[INFO][0m   Instance Type: t3.micro
+[0;34m[INFO][0m   Volume Size: 5GB
+[0;34m[INFO][0m   Region: us-east-1
+[0;34m[INFO][0m Checking prerequisites...
+[0;32m[SUCCESS][0m AWS CLI found: aws-cli/2.0.30 Python/3.7.7 Windows/10 botocore/2.0.0dev34
+[0;32m[SUCCESS][0m Template file found
+[0;32m[SUCCESS][0m AWS credentials valid (Account: 065317679010)
+[0;32m[SUCCESS][0m AWS region valid: us-east-1
+[0;32m[SUCCESS][0m S3 bucket name format valid: cc-transactions-lake-2026
+[1;33m[WARN][0m Cannot verify S3 bucket availability — proceeding (CloudFormation will handle it)
+[0;34m[INFO][0m Creating CloudFormation stack: cc-transactions-lake-stack
+[0;34m[INFO][0m Submitting template to CloudFormation...
+{
+    "StackId": "arn:aws:cloudformation:us-east-1:065317679010:stack/cc-transactions-lake-stack/0a04baa0-4941-11f1-b183-12359b386d2d"
+}
+[0;32m[SUCCESS][0m Stack creation initiated
+[0;34m[INFO][0m Waiting for stack creation to complete (this may take 10-15 minutes)...
+
+Waiter StackCreateComplete failed: Waiter encountered a terminal failure state
+[0;32m[SUCCESS][0m Stack creation completed!
+[0;34m[INFO][0m Retrieving stack outputs...
+
+[0;32m=== Stack Outputs ===[0m
+null

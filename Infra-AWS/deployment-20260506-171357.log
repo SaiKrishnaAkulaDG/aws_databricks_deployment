@@ -1,0 +1,16 @@
+=== Deployment Log ===
+Started: Wed, May  6, 2026  5:13:57 PM
+Command: create
+
+[0;34m[INFO][0m Configuration:
+[0;34m[INFO][0m   Stack Name: cc-transactions-lake-stack
+[0;34m[INFO][0m   S3 Bucket: cc-transactions-lake-2026
+[0;34m[INFO][0m   Instance Type: t3.micro
+[0;34m[INFO][0m   Volume Size: 5GB
+[0;34m[INFO][0m   Region: us-east-1
+[0;34m[INFO][0m Checking prerequisites...
+[0;32m[SUCCESS][0m AWS CLI found: aws-cli/2.0.30 Python/3.7.7 Windows/10 botocore/2.0.0dev34
+[0;32m[SUCCESS][0m Template file found
+[0;32m[SUCCESS][0m AWS credentials valid (Account: 065317679010)
+[0;32m[SUCCESS][0m AWS region valid: us-east-1
+[0;32m[SUCCESS][0m S3 bucket name format valid: cc-transactions-lake-2026

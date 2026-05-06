@@ -4,7 +4,7 @@ Description: 'CloudFormation Template for Credit Card Transactions Data Lake Pip
 Parameters:
   S3BucketName:
     Type: String
-    Default: cc-transactions-lake-2026
+    Default: cc-transaction-databricks-datalake-2026
     Description: S3 bucket name for data lake (must be globally unique)
   
   EC2InstanceType:

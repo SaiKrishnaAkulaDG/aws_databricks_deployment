@@ -67,7 +67,7 @@ The template has been created: `cf-cc-transactions-lake.yaml`
 ```bash
 # Set parameters
 STACK_NAME="cc-transactions-lake-stack"
-S3_BUCKET_NAME="cc-transactions-lake-2026"  # Must be globally unique
+S3_BUCKET_NAME="cc-transaction-databricks-datalake-2026"  # Must be globally unique
 REGION="us-east-1"
 
 # Create the stack
@@ -100,7 +100,7 @@ aws cloudformation describe-stacks \
 3. Upload the template file: `cf-cc-transactions-lake.yaml`
 4. Fill in stack details:
    - Stack name: `cc-transactions-lake-stack`
-   - S3 Bucket Name: `cc-transactions-lake-2026`
+   - S3 Bucket Name: `cc-transaction-databricks-datalake-2026`
    - EC2 Instance Type: `t3.small`
    - EBS Volume Size: `20`
 5. Click "Create Stack"
@@ -159,7 +159,7 @@ aws --version
 mkdir -p /app/source
 
 # Upload to S3 for syncing
-aws s3 sync /app/source s3://cc-transactions-lake-2026/source/
+aws s3 sync /app/source s3://cc-transaction-databricks-datalake-2026/source/
 ```
 
 **Expected source file structure:**
@@ -253,22 +253,22 @@ EOF
 
 ```bash
 # Sync data/ outputs to S3
-aws s3 sync /app/data/bronze   s3://cc-transactions-lake-2026/bronze/
-aws s3 sync /app/data/silver   s3://cc-transactions-lake-2026/silver/
-aws s3 sync /app/data/gold     s3://cc-transactions-lake-2026/gold/
-aws s3 sync /app/data/pipeline s3://cc-transactions-lake-2026/pipeline/
+aws s3 sync /app/data/bronze   s3://cc-transaction-databricks-datalake-2026/bronze/
+aws s3 sync /app/data/silver   s3://cc-transaction-databricks-datalake-2026/silver/
+aws s3 sync /app/data/gold     s3://cc-transaction-databricks-datalake-2026/gold/
+aws s3 sync /app/data/pipeline s3://cc-transaction-databricks-datalake-2026/pipeline/
 
 # List S3 contents
-aws s3 ls s3://cc-transactions-lake-2026/bronze/   --recursive
-aws s3 ls s3://cc-transactions-lake-2026/silver/   --recursive
-aws s3 ls s3://cc-transactions-lake-2026/gold/     --recursive
-aws s3 ls s3://cc-transactions-lake-2026/pipeline/ --recursive
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/bronze/   --recursive
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/silver/   --recursive
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/gold/     --recursive
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/pipeline/ --recursive
 
 # Verify file counts
-aws s3 ls s3://cc-transactions-lake-2026/bronze/   --recursive | wc -l
-aws s3 ls s3://cc-transactions-lake-2026/silver/   --recursive | wc -l
-aws s3 ls s3://cc-transactions-lake-2026/gold/     --recursive | wc -l
-aws s3 ls s3://cc-transactions-lake-2026/pipeline/ --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/bronze/   --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/silver/   --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/gold/     --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/pipeline/ --recursive | wc -l
 ```
 
 ### Validate Data Quality
@@ -350,7 +350,7 @@ crontab -e
 
 ```bash
 # Calculate total size
-aws s3 ls s3://cc-transactions-lake-2026 --recursive \
+aws s3 ls s3://cc-transaction-databricks-datalake-2026 --recursive \
   --summarize \
   --human-readable | grep "Total Size"
 ```
@@ -406,7 +406,7 @@ aws cloudformation wait stack-delete-complete \
 
 ```bash
 # Empty S3 bucket
-aws s3 rm s3://cc-transactions-lake-2026 --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026 --recursive
 
 # Then delete stack
 aws cloudformation delete-stack --stack-name $STACK_NAME
@@ -424,7 +424,7 @@ aws iam get-role-policy \
   --policy-name S3AccessPolicy
 
 # Test S3 access from EC2
-aws s3 ls s3://cc-transactions-lake-2026/
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/
 ```
 
 ### Issue: Disk space issues
@@ -487,10 +487,10 @@ After stack creation, you'll have these outputs:
 
 | Output | Description | Value |
 |--------|-------------|-------|
-| S3BucketName | Data lake bucket name | cc-transactions-lake-2026 |
-| BronzePath | S3 location for raw data | s3://cc-transactions-lake-2026/bronze/ |
-| SilverPath | S3 location for cleaned data | s3://cc-transactions-lake-2026/silver/ |
-| GoldPath | S3 location for analytics | s3://cc-transactions-lake-2026/gold/ |
+| S3BucketName | Data lake bucket name | cc-transaction-databricks-datalake-2026 |
+| BronzePath | S3 location for raw data | s3://cc-transaction-databricks-datalake-2026/bronze/ |
+| SilverPath | S3 location for cleaned data | s3://cc-transaction-databricks-datalake-2026/silver/ |
+| GoldPath | S3 location for analytics | s3://cc-transaction-databricks-datalake-2026/gold/ |
 | EC2InstanceId | EC2 instance identifier | i-xxxxx |
 | EC2InstancePublicIP | Public IP (informational) | xxx.xxx.xxx.xxx |
 | EC2RoleArn | IAM role for permissions | arn:aws:iam::xxxxx:role/xxxxx |

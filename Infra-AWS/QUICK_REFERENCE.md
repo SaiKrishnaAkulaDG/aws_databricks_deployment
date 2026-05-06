@@ -15,7 +15,7 @@ chmod +x deploy-cc-lake.sh
 aws cloudformation create-stack \
   --stack-name cc-transactions-lake-stack \
   --template-body file://cf-cc-transactions-lake.yaml \
-  --parameters ParameterKey=S3BucketName,ParameterValue=cc-transactions-lake-2026 \
+  --parameters ParameterKey=S3BucketName,ParameterValue=cc-transaction-databricks-datalake-2026 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -63,7 +63,7 @@ docker compose run --rm pipeline python -m pipeline.pipeline --mode incremental
 
 ```bash
 # Set your S3 bucket name (from CloudFormation outputs)
-S3_BUCKET_NAME="cc-transactions-lake-2026"
+S3_BUCKET_NAME="cc-transaction-databricks-datalake-2026"
 
 # Check S3
 aws s3 ls s3://$S3_BUCKET_NAME/gold/ --recursive
@@ -196,10 +196,10 @@ for log in logs:
 
 ```bash
 # Sync all data/ outputs to S3
-aws s3 sync /app/data/bronze   s3://cc-transactions-lake-2026/bronze/
-aws s3 sync /app/data/silver   s3://cc-transactions-lake-2026/silver/
-aws s3 sync /app/data/gold     s3://cc-transactions-lake-2026/gold/
-aws s3 sync /app/data/pipeline s3://cc-transactions-lake-2026/pipeline/
+aws s3 sync /app/data/bronze   s3://cc-transaction-databricks-datalake-2026/bronze/
+aws s3 sync /app/data/silver   s3://cc-transaction-databricks-datalake-2026/silver/
+aws s3 sync /app/data/gold     s3://cc-transaction-databricks-datalake-2026/gold/
+aws s3 sync /app/data/pipeline s3://cc-transaction-databricks-datalake-2026/pipeline/
 ```
 
 ### Automatic (Via Script)
@@ -317,12 +317,12 @@ df -h && free -h
 
 ```bash
 # Calculate total size
-aws s3 ls s3://cc-transactions-lake-2026 --recursive --summarize --human-readable
+aws s3 ls s3://cc-transaction-databricks-datalake-2026 --recursive --summarize --human-readable
 
 # Count objects by layer
-aws s3 ls s3://cc-transactions-lake-2026/bronze/ --recursive | wc -l
-aws s3 ls s3://cc-transactions-lake-2026/silver/ --recursive | wc -l
-aws s3 ls s3://cc-transactions-lake-2026/gold/ --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/bronze/ --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/silver/ --recursive | wc -l
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/gold/ --recursive | wc -l
 ```
 
 ---
@@ -389,7 +389,7 @@ free -h
 ./deploy-cc-lake.sh delete
 
 # Or manual
-aws s3 rm s3://cc-transactions-lake-2026 --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026 --recursive
 aws cloudformation delete-stack --stack-name cc-transactions-lake-stack
 ```
 
@@ -397,10 +397,10 @@ aws cloudformation delete-stack --stack-name cc-transactions-lake-stack
 
 ```bash
 # Keep infrastructure, clear data
-aws s3 rm s3://cc-transactions-lake-2026/bronze   --recursive
-aws s3 rm s3://cc-transactions-lake-2026/silver   --recursive
-aws s3 rm s3://cc-transactions-lake-2026/gold     --recursive
-aws s3 rm s3://cc-transactions-lake-2026/pipeline --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026/bronze   --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026/silver   --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026/gold     --recursive
+aws s3 rm s3://cc-transaction-databricks-datalake-2026/pipeline --recursive
 ```
 
 ### Clear EC2 Local Data
@@ -420,7 +420,7 @@ rm -rf /app/dbt/target/*
 |-----------|---------|-------|
 | Instance Type | t3.micro | Cheapest x86 — sufficient for 7-day sample data |
 | EBS Volume | 5GB | Sufficient for code + 7-day data (~50MB used) |
-| S3 Bucket | cc-transactions-lake-2026 | Must be globally unique |
+| S3 Bucket | cc-transaction-databricks-datalake-2026 | Must be globally unique |
 | Region | us-east-1 | Change to your closest region |
 
 > **Cost tip:** Stop the EC2 instance after each pipeline run. Running cost ~$0.0104/hr; stopped cost ~$0.0004/hr (EBS only). A single pipeline run costs ~$0.002.

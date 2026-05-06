@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 STACK_NAME="${STACK_NAME:-cc-transactions-lake-stack}"
-S3_BUCKET_NAME="${S3_BUCKET_NAME:-cc-transactions-lake-2026}"
+S3_BUCKET_NAME="${S3_BUCKET_NAME:-cc-transaction-databricks-datalake-2026}"
 EC2_INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-t3.micro}"
 EBS_VOLUME_SIZE="${EBS_VOLUME_SIZE:-5}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git}"
