@@ -22,16 +22,14 @@ aws cloudformation create-stack \
 ### 2. Connect to EC2
 
 ```bash
-# Get instance ID from CloudFormation outputs
-INSTANCE_ID=$(aws cloudformation describe-stacks \
+# Get IP from CloudFormation outputs
+IP=$(aws cloudformation describe-stacks \
   --stack-name cc-transactions-lake-stack \
-  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstancePublicIP`].OutputValue' \
   --output text)
 
-# Connect via Session Manager (no key pair needed)
-aws ssm start-session --target $INSTANCE_ID --region us-east-1
-
-# Or via AWS Console: EC2 → Instances → Connect → Session Manager
+# SSH into instance
+ssh -i cc-transactions-lake-key.pem ubuntu@$IP
 ```
 
 ### 3. Deploy Code (On EC2)
@@ -353,7 +351,7 @@ aws iam get-role-policy \
   --policy-name S3AccessPolicy
 
 # Test from EC2
-# Connect via Session Manager then run: aws s3 ls
+ssh ubuntu@<IP> 'aws s3 ls'
 ```
 
 ### Disk Space Full
@@ -406,7 +404,7 @@ aws s3 rm s3://cc-transaction-databricks-datalake-2026/pipeline --recursive
 ### Clear EC2 Local Data
 
 ```bash
-# Connect via Session Manager then run:
+ssh -i cc-transactions-lake-key.pem ubuntu@<IP> << 'EOF'
 rm -rf /app/data/bronze/* /app/data/silver/* /app/data/gold/*
 rm -f /app/data/pipeline/control.parquet /app/data/pipeline/run_log.parquet
 rm -rf /app/dbt/target/*
@@ -433,7 +431,7 @@ After deployment, verify:
 
 - [ ] CloudFormation stack status = CREATE_COMPLETE
 - [ ] EC2 instance is running
-- [ ] Can connect via Session Manager (AWS Console or CLI)
+- [ ] Can SSH into instance (ssh -i cc-transactions-lake-key.pem ubuntu@<IP>)
 - [ ] S3 bucket exists with bronze/, silver/, gold/ folders
 - [ ] Python3 and pip installed on EC2
 - [ ] DuckDB, pandas, boto3 libraries installed

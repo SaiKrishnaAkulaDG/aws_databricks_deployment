@@ -106,18 +106,18 @@
 │ Security Group: cc-transactions-lake-sg                │
 ├─────────────────────────────────────────────────────────┤
 │ Inbound Rules:                                          │
-│ └─ (None — all inbound DENY)                          │
+│ └─ SSH (TCP 22): 0.0.0.0/0                            │
 │                                                        │
 │ Outbound Rules:                                        │
-│ ├─ HTTPS (TCP 443): 0.0.0.0/0 (S3 API, SSM, pip, git)│
+│ ├─ HTTPS (TCP 443): 0.0.0.0/0 (S3 API, pip, git)     │
 │ ├─ HTTP (TCP 80): 0.0.0.0/0 (fallback)               │
 │ └─ DNS (UDP 53): 0.0.0.0/0 (name resolution)         │
 └─────────────────────────────────────────────────────────┘
 ```
 
 **Security Considerations**:
-- No inbound ports open — EC2 access via Session Manager (outbound HTTPS only)
-- Outbound HTTPS to AWS APIs (S3, SSM, CloudWatch, package repos)
+- SSH (port 22) open — restrict CidrIp to your IP in production
+- Outbound HTTPS to AWS APIs (S3, CloudWatch, package repos)
 - DNS required for package installation and git cloning
 - No inbound access to data lake (S3 provides access control)
 
@@ -793,7 +793,7 @@ TOTAL SUCCESS RATE: 100%
 - [x] Default user changed to ubuntu
 - [x] AWS region configured
 - [x] S3 bucket name globally unique
-- [x] Session Manager plugin installed locally (no key pair needed)
+- [x] EC2 key pair created in us-east-1 (cc-transactions-lake-key)
 
 ### Post-Deployment
 - [x] CloudFormation stack status: CREATE_COMPLETE

@@ -20,6 +20,7 @@ STACK_NAME="${STACK_NAME:-cc-transactions-lake-stack}"
 S3_BUCKET_NAME="${S3_BUCKET_NAME:-cc-transaction-databricks-datalake-2026}"
 EC2_INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-t3.micro}"
 EBS_VOLUME_SIZE="${EBS_VOLUME_SIZE:-5}"
+KEY_NAME="${KEY_NAME:-cc-transactions-lake-key}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git}"
 REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_FILE="cf-cc-transactions-lake.yaml"
@@ -124,6 +125,7 @@ create_stack() {
             "ParameterKey=S3BucketName,ParameterValue=$S3_BUCKET_NAME" \
             "ParameterKey=EC2InstanceType,ParameterValue=$EC2_INSTANCE_TYPE" \
             "ParameterKey=EBSVolumeSize,ParameterValue=$EBS_VOLUME_SIZE" \
+            "ParameterKey=KeyName,ParameterValue=$KEY_NAME" \
             "ParameterKey=GitHubRepoURL,ParameterValue=$GITHUB_REPO_URL" \
         --capabilities CAPABILITY_NAMED_IAM \
         --region "$REGION" 2>&1 | tee -a "$LOG_FILE"
@@ -269,9 +271,9 @@ SETUP_EOF
     
     echo -e "\n${YELLOW}Next steps:${NC}" | tee -a "$LOG_FILE"
     echo "  1. Wait 2-3 minutes for EC2 user data to complete" | tee -a "$LOG_FILE"
-    echo "  2. Connect via Session Manager (local CLI):" | tee -a "$LOG_FILE"
-    echo "     aws ssm start-session --target <instance-id> --region $REGION --profile <your-profile>" | tee -a "$LOG_FILE"
-    echo "  3. Or via AWS Console: EC2 → Instances → Connect → Session Manager" | tee -a "$LOG_FILE"
+    echo "  2. SSH into instance:" | tee -a "$LOG_FILE"
+    echo "     ssh -i ${KEY_NAME}.pem ubuntu@$INSTANCE_IP" | tee -a "$LOG_FILE"
+    echo "  3. Source CSV files are in /app/source/ — upload via scp if needed" | tee -a "$LOG_FILE"
     echo "  4. Run: docker compose run --rm pipeline python -m pipeline.pipeline --mode historical --start-date 2024-01-01 --end-date 2024-01-07" | tee -a "$LOG_FILE"
     echo "  5. After pipeline finishes, STOP the instance to avoid idle charges:" | tee -a "$LOG_FILE"
     echo "     aws ec2 stop-instances --instance-ids \$INSTANCE_ID --region $REGION" | tee -a "$LOG_FILE"
@@ -292,6 +294,7 @@ Environment Variables:
   S3_BUCKET_NAME       (default: cc-transactions-lake-2026)
   EC2_INSTANCE_TYPE    (default: t3.micro)
   EBS_VOLUME_SIZE      (default: 5)
+  KEY_NAME             (default: cc-transactions-lake-key)
   GITHUB_REPO_URL      (default: https://github.com/SaiKrishnaAkulaDG/aws_databricks_deployment.git)
   AWS_REGION           (default: us-east-1)
 

@@ -44,10 +44,14 @@ This guide provides step-by-step instructions to deploy the credit card transact
 
 1. **AWS Account**: Active AWS account with appropriate permissions
 2. **AWS CLI**: Configured with credentials or SSO profile
-3. **Session Manager Plugin**: Installed locally for terminal access to EC2
-   - Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
+3. **EC2 Key Pair**: Must exist in `us-east-1` before deploying
+   ```bash
+   aws ec2 create-key-pair --key-name cc-transactions-lake-key \
+     --region us-east-1 --profile DG4-Developer-065317679010 \
+     --query 'KeyMaterial' --output text > cc-transactions-lake-key.pem
+   chmod 600 cc-transactions-lake-key.pem
+   ```
 4. **AWS CloudFormation**: Service enabled in your region
-   - **No EC2 Key Pair required** — access is via AWS Systems Manager Session Manager
 
 ## Step 1: Prepare the CloudFormation Template
 
@@ -58,7 +62,7 @@ The template has been created: `cf-cc-transactions-lake.yaml`
 - 20GB gp3 EBS volume
 - S3 bucket with three folder structure (bronze/silver/gold)
 - IAM role with S3 and CloudWatch permissions
-- Security group (no inbound ports — access via Session Manager only)
+- Security group with SSH access (port 22)
 
 ## Step 2: Deploy the Stack
 
@@ -111,17 +115,15 @@ aws cloudformation describe-stacks \
 Once the stack is created, connect to the EC2 instance:
 
 ```bash
-# Get instance ID
-INSTANCE_ID=$(aws cloudformation describe-stacks \
+# Get instance IP
+INSTANCE_IP=$(aws cloudformation describe-stacks \
   --stack-name $STACK_NAME \
   --region $REGION \
-  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstancePublicIP`].OutputValue' \
   --output text)
 
-# Connect via Session Manager (local CLI — requires Session Manager plugin)
-aws ssm start-session --target $INSTANCE_ID --region $REGION
-
-# Or via AWS Console: EC2 → Instances → select instance → Connect → Session Manager
+# SSH into the instance
+ssh -i cc-transactions-lake-key.pem ubuntu@$INSTANCE_IP
 ```
 
 ### On the EC2 Instance:
@@ -328,7 +330,7 @@ aws ec2 stop-instances --instance-ids $INSTANCE_ID --region $REGION
 
 # Start it again before the next run
 aws ec2 start-instances --instance-ids $INSTANCE_ID --region $REGION
-# Wait ~60s for instance to be ready, then connect via Session Manager
+# Wait ~60s for instance to be ready, then SSH in
 ```
 
 ### Set Up Scheduled Pipeline Execution
@@ -468,7 +470,10 @@ ls -la /app/source/
 
 ## Security Best Practices
 
-1. **No SSH Keys** — EC2 access via Session Manager only; no port 22, no key files to manage
+1. **SSH Key Management**
+   ```bash
+   chmod 600 cc-transactions-lake-key.pem
+   ```
 
 2. **S3 Encryption**
    - The template enables S3 versioning
@@ -479,7 +484,7 @@ ls -la /app/source/
    - No public internet access to S3 bucket (blocked by default)
 
 4. **Network Security**
-   - No inbound ports open — Session Manager uses outbound HTTPS only
+   - SSH access restricted to port 22; consider restricting CidrIp to your IP in production
 
 ## Outputs Reference
 

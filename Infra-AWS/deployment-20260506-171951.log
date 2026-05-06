@@ -1,0 +1,102 @@
+=== Deployment Log ===
+Started: Wed, May  6, 2026  5:19:52 PM
+Command: create
+
+[0;34m[INFO][0m Configuration:
+[0;34m[INFO][0m   Stack Name: cc-transactions-lake-stack
+[0;34m[INFO][0m   S3 Bucket: cc-transaction-databricks-datalake-2026
+[0;34m[INFO][0m   Instance Type: t3.micro
+[0;34m[INFO][0m   Volume Size: 5GB
+[0;34m[INFO][0m   Region: us-east-1
+[0;34m[INFO][0m Checking prerequisites...
+[0;32m[SUCCESS][0m AWS CLI found: aws-cli/2.0.30 Python/3.7.7 Windows/10 botocore/2.0.0dev34
+[0;32m[SUCCESS][0m Template file found
+[0;32m[SUCCESS][0m AWS credentials valid (Account: 065317679010)
+[0;32m[SUCCESS][0m AWS region valid: us-east-1
+[0;32m[SUCCESS][0m S3 bucket name format valid: cc-transaction-databricks-datalake-2026
+[0;32m[SUCCESS][0m S3 bucket name available (will be created by CloudFormation)
+[0;34m[INFO][0m Creating CloudFormation stack: cc-transactions-lake-stack
+[0;34m[INFO][0m Submitting template to CloudFormation...
+{
+    "StackId": "arn:aws:cloudformation:us-east-1:065317679010:stack/cc-transactions-lake-stack/ba8a6550-4941-11f1-8d04-0ea73ae56e41"
+}
+[0;32m[SUCCESS][0m Stack creation initiated
+[0;34m[INFO][0m Waiting for stack creation to complete (this may take 10-15 minutes)...
+[0;32m[SUCCESS][0m Stack creation completed!
+[0;34m[INFO][0m Retrieving stack outputs...
+
+[0;32m=== Stack Outputs ===[0m
+[
+    {
+        "OutputKey": "EC2InstancePublicIP",
+        "OutputValue": "34.235.168.99",
+        "Description": "Public IP address of EC2 instance"
+    },
+    {
+        "OutputKey": "BronzePath",
+        "OutputValue": "s3://cc-transaction-databricks-datalake-2026/bronze/",
+        "Description": "S3 path for Bronze layer"
+    },
+    {
+        "OutputKey": "SilverPath",
+        "OutputValue": "s3://cc-transaction-databricks-datalake-2026/silver/",
+        "Description": "S3 path for Silver layer"
+    },
+    {
+        "OutputKey": "PipelineLogGroupName",
+        "OutputValue": "/aws/ec2/cc-transactions-lake",
+        "Description": "CloudWatch Log Group for pipeline execution"
+    },
+    {
+        "OutputKey": "S3BucketArn",
+        "OutputValue": "arn:aws:s3:::cc-transaction-databricks-datalake-2026",
+        "Description": "ARN of the S3 data lake bucket"
+    },
+    {
+        "OutputKey": "EC2RoleArn",
+        "OutputValue": "arn:aws:iam::065317679010:role/cc-transactions-lake-ec2-role",
+        "Description": "IAM Role ARN for EC2 instance"
+    },
+    {
+        "OutputKey": "S3BucketName",
+        "OutputValue": "cc-transaction-databricks-datalake-2026",
+        "Description": "Name of the S3 data lake bucket",
+        "ExportName": "cc-lake-bucket-cc-transactions-lake-stack"
+    },
+    {
+        "OutputKey": "EC2InstanceId",
+        "OutputValue": "i-0092ab954a20433db",
+        "Description": "EC2 Instance ID",
+        "ExportName": "cc-lake-instance-cc-transactions-lake-stack"
+    },
+    {
+        "OutputKey": "GoldPath",
+        "OutputValue": "s3://cc-transaction-databricks-datalake-2026/gold/",
+        "Description": "S3 path for Gold layer"
+    },
+    {
+        "OutputKey": "PipelinePath",
+        "OutputValue": "s3://cc-transaction-databricks-datalake-2026/pipeline/",
+        "Description": "S3 path for pipeline control plane (control.parquet, run_log.parquet)"
+    }
+]
+
+[0;34mQuick Reference:[0m
+  Instance ID: i-0092ab954a20433db
+  Instance IP: 34.235.168.99
+  S3 Bucket: cc-transaction-databricks-datalake-2026
+
+[1;33mTo connect via SSH:[0m
+  ssh -i <your-key-pair.pem> ec2-user@34.235.168.99
+[0;34m[INFO][0m Preparing EC2 connection details...
+[0;32m[SUCCESS][0m EC2 Instance IP: 34.235.168.99
+
+[1;33mNext steps:[0m
+  1. Wait 2-3 minutes for EC2 user data to complete
+  2. Connect via Session Manager (local CLI):
+     aws ssm start-session --target <instance-id> --region us-east-1 --profile <your-profile>
+  3. Or via AWS Console: EC2 → Instances → Connect → Session Manager
+  4. Run: docker compose run --rm pipeline python -m pipeline.pipeline --mode historical --start-date 2024-01-01 --end-date 2024-01-07
+  5. After pipeline finishes, STOP the instance to avoid idle charges:
+     aws ec2 stop-instances --instance-ids $INSTANCE_ID --region us-east-1
+[0;32m[SUCCESS][0m Operation completed. Full log saved to: deployment-20260506-171951.log
