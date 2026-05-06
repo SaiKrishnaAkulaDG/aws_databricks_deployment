@@ -86,8 +86,10 @@ check_prerequisites() {
     log_success "S3 bucket name format valid: $S3_BUCKET_NAME"
 
     # Check S3 bucket name availability
+    set +e
     bucket_check=$(aws s3api head-bucket --bucket "$S3_BUCKET_NAME" --region "$REGION" 2>&1)
     bucket_exit=$?
+    set -e
     if [ $bucket_exit -eq 0 ]; then
         log_warn "S3 bucket already exists: $S3_BUCKET_NAME (CloudFormation will reuse it)"
     elif echo "$bucket_check" | grep -qi "404\|NoSuchBucket\|does not exist"; then
