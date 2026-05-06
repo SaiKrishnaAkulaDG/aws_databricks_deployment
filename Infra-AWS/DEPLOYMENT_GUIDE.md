@@ -43,13 +43,11 @@ This guide provides step-by-step instructions to deploy the credit card transact
 ## Prerequisites
 
 1. **AWS Account**: Active AWS account with appropriate permissions
-2. **AWS CLI**: Configured with credentials
-3. **Local Git**: To clone the pipeline codebase
+2. **AWS CLI**: Configured with credentials or SSO profile
+3. **Session Manager Plugin**: Installed locally for terminal access to EC2
+   - Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
 4. **AWS CloudFormation**: Service enabled in your region
-5. **EC2 Key Pair**: Created in your target AWS region before deployment
-   - Create one: `aws ec2 create-key-pair --key-name cc-transactions-lake-key --region us-east-1 --query 'KeyMaterial' --output text > cc-transactions-lake-key.pem`
-   - Set permissions: `chmod 600 cc-transactions-lake-key.pem`
-   - **⚠️ IMPORTANT**: The key pair name in CloudFormation template must match an existing key pair in your AWS region
+   - **No EC2 Key Pair required** — access is via AWS Systems Manager Session Manager
 
 ## Step 1: Prepare the CloudFormation Template
 
@@ -60,7 +58,7 @@ The template has been created: `cf-cc-transactions-lake.yaml`
 - 20GB gp3 EBS volume
 - S3 bucket with three folder structure (bronze/silver/gold)
 - IAM role with S3 and CloudWatch permissions
-- Security group with SSH access
+- Security group (no inbound ports — access via Session Manager only)
 
 ## Step 2: Deploy the Stack
 
@@ -113,19 +111,17 @@ aws cloudformation describe-stacks \
 Once the stack is created, connect to the EC2 instance:
 
 ```bash
-# Get instance ID and IP
+# Get instance ID
 INSTANCE_ID=$(aws cloudformation describe-stacks \
   --stack-name $STACK_NAME \
+  --region $REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
   --output text)
 
-INSTANCE_IP=$(aws cloudformation describe-stacks \
-  --stack-name $STACK_NAME \
-  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstancePublicIP`].OutputValue' \
-  --output text)
+# Connect via Session Manager (local CLI — requires Session Manager plugin)
+aws ssm start-session --target $INSTANCE_ID --region $REGION
 
-# SSH into the instance
-ssh -i cc-transactions-lake-key.pem ubuntu@$INSTANCE_IP
+# Or via AWS Console: EC2 → Instances → select instance → Connect → Session Manager
 ```
 
 ### On the EC2 Instance:
@@ -332,7 +328,7 @@ aws ec2 stop-instances --instance-ids $INSTANCE_ID --region $REGION
 
 # Start it again before the next run
 aws ec2 start-instances --instance-ids $INSTANCE_ID --region $REGION
-# Wait ~60s for instance to be ready, then SSH in
+# Wait ~60s for instance to be ready, then connect via Session Manager
 ```
 
 ### Set Up Scheduled Pipeline Execution
@@ -472,11 +468,7 @@ ls -la /app/source/
 
 ## Security Best Practices
 
-1. **SSH Key Management**
-   ```bash
-   # Restrict SSH key permissions
-   chmod 600 ~/.ssh/cc-transactions-lake-key.pem
-   ```
+1. **No SSH Keys** — EC2 access via Session Manager only; no port 22, no key files to manage
 
 2. **S3 Encryption**
    - The template enables S3 versioning
@@ -487,8 +479,7 @@ ls -la /app/source/
    - No public internet access to S3 bucket (blocked by default)
 
 4. **Network Security**
-   - SSH access limited to specified security group
-   - Consider restricting SSH to specific IP ranges
+   - No inbound ports open — Session Manager uses outbound HTTPS only
 
 ## Outputs Reference
 
@@ -501,7 +492,7 @@ After stack creation, you'll have these outputs:
 | SilverPath | S3 location for cleaned data | s3://cc-transactions-lake-2026/silver/ |
 | GoldPath | S3 location for analytics | s3://cc-transactions-lake-2026/gold/ |
 | EC2InstanceId | EC2 instance identifier | i-xxxxx |
-| EC2InstancePublicIP | SSH connection address | xxx.xxx.xxx.xxx |
+| EC2InstancePublicIP | Public IP (informational) | xxx.xxx.xxx.xxx |
 | EC2RoleArn | IAM role for permissions | arn:aws:iam::xxxxx:role/xxxxx |
 
 ## Next Steps

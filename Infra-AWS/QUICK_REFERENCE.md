@@ -22,14 +22,16 @@ aws cloudformation create-stack \
 ### 2. Connect to EC2
 
 ```bash
-# Get IP from CloudFormation outputs
-IP=$(aws cloudformation describe-stacks \
+# Get instance ID from CloudFormation outputs
+INSTANCE_ID=$(aws cloudformation describe-stacks \
   --stack-name cc-transactions-lake-stack \
-  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstancePublicIP`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
   --output text)
 
-# SSH into instance
-ssh -i cc-transactions-lake-key.pem ubuntu@$IP
+# Connect via Session Manager (no key pair needed)
+aws ssm start-session --target $INSTANCE_ID --region us-east-1
+
+# Or via AWS Console: EC2 → Instances → Connect → Session Manager
 ```
 
 ### 3. Deploy Code (On EC2)
@@ -307,8 +309,8 @@ aws ec2 describe-instance-status \
   --query 'InstanceStatuses[0].[InstanceStatus.Status,SystemStatus.Status]' \
   --output text
 
-# Check disk space / memory (SSH in first)
-ssh ubuntu@<IP> 'df -h && free -h'
+# Check disk space / memory (connect via Session Manager first, then run)
+df -h && free -h
 ```
 
 ### S3 Storage Usage
@@ -351,7 +353,7 @@ aws iam get-role-policy \
   --policy-name S3AccessPolicy
 
 # Test from EC2
-ssh ubuntu@<IP> 'aws s3 ls'
+# Connect via Session Manager then run: aws s3 ls
 ```
 
 ### Disk Space Full
@@ -404,11 +406,10 @@ aws s3 rm s3://cc-transactions-lake-2026/pipeline --recursive
 ### Clear EC2 Local Data
 
 ```bash
-ssh -i cc-transactions-lake-key.pem ubuntu@<IP> << 'EOF'
+# Connect via Session Manager then run:
 rm -rf /app/data/bronze/* /app/data/silver/* /app/data/gold/*
 rm -f /app/data/pipeline/control.parquet /app/data/pipeline/run_log.parquet
 rm -rf /app/dbt/target/*
-EOF
 ```
 
 ---
@@ -432,7 +433,7 @@ After deployment, verify:
 
 - [ ] CloudFormation stack status = CREATE_COMPLETE
 - [ ] EC2 instance is running
-- [ ] Can SSH into instance
+- [ ] Can connect via Session Manager (AWS Console or CLI)
 - [ ] S3 bucket exists with bronze/, silver/, gold/ folders
 - [ ] Python3 and pip installed on EC2
 - [ ] DuckDB, pandas, boto3 libraries installed

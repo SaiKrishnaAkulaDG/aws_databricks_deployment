@@ -23,11 +23,6 @@ Parameters:
     MaxValue: 20
     Description: EBS volume size in GB — 5GB sufficient for pipeline code + 7-day sample data
 
-  KeyName:
-    Type: String
-    Default: cc-transactions-lake-key
-    Description: EC2 Key Pair name for SSH access
-
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -78,6 +73,7 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy'
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
         - PolicyName: S3AccessPolicy
           PolicyDocument:
@@ -118,12 +114,6 @@ Resources:
     Properties:
       GroupName: cc-transactions-lake-sg
       GroupDescription: Security group for CC transactions lake pipeline
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-          Description: SSH access
       Tags:
         - Key: Name
           Value: cc-transactions-lake-sg
@@ -136,7 +126,6 @@ Resources:
     Properties:
       ImageId: ami-0ff290337e78c83bf
       InstanceType: !Ref EC2InstanceType
-      KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
       SecurityGroupIds:
         - !Ref EC2SecurityGroup
