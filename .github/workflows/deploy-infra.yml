@@ -1,0 +1,71 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      s3_bucket_name:
+        description: 'S3 bucket name (must be globally unique)'
+        required: false
+        default: 'cc-transaction-databricks-datalake-2026'
+      ec2_instance_type:
+        description: 'EC2 instance type'
+        required: false
+        default: 't3.micro'
+      ebs_volume_size:
+        description: 'EBS volume size in GB'
+        required: false
+        default: '5'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy CloudFormation Stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Validate CloudFormation template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://Infra-AWS/cf-cc-transactions-lake.yaml \
+            --region us-east-1
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation create-stack \
+            --stack-name cc-transactions-lake-stack \
+            --template-body file://Infra-AWS/cf-cc-transactions-lake.yaml \
+            --parameters \
+              ParameterKey=S3BucketName,ParameterValue=${{ github.event.inputs.s3_bucket_name }} \
+              ParameterKey=EC2InstanceType,ParameterValue=${{ github.event.inputs.ec2_instance_type }} \
+              ParameterKey=EBSVolumeSize,ParameterValue=${{ github.event.inputs.ebs_volume_size }} \
+              ParameterKey=KeyName,ParameterValue=cc-transactions-lake-key \
+              ParameterKey=GitHubRepoURL,ParameterValue=https://github.com/${{ github.repository }}.git \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region us-east-1
+
+      - name: Wait for stack creation
+        run: |
+          echo "Waiting for stack creation (up to 20 minutes)..."
+          aws cloudformation wait stack-create-complete \
+            --stack-name cc-transactions-lake-stack \
+            --region us-east-1
+
+      - name: Print stack outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name cc-transactions-lake-stack \
+            --query 'Stacks[0].Outputs' \
+            --output table \
+            --region us-east-1

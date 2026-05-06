@@ -1,0 +1,99 @@
+name: Teardown Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "DELETE" to confirm teardown'
+        required: true
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  STACK_NAME: cc-transactions-lake-stack
+  S3_BUCKET: cc-transaction-databricks-datalake-2026
+  AWS_REGION: us-east-1
+
+jobs:
+  teardown:
+    name: Teardown CloudFormation Stack
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.confirm == 'DELETE' }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Check stack exists
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].StackStatus' \
+            --output text \
+            --region $AWS_REGION 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Stack status: $STATUS"
+          if [ "$STATUS" = "DOES_NOT_EXIST" ]; then
+            echo "Stack does not exist — nothing to delete."
+            exit 0
+          fi
+
+      - name: Stop EC2 instance (if running)
+        run: |
+          INSTANCE_ID=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+            --output text \
+            --region $AWS_REGION 2>/dev/null || echo "")
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+            STATE=$(aws ec2 describe-instances \
+              --instance-ids $INSTANCE_ID \
+              --query 'Reservations[0].Instances[0].State.Name' \
+              --output text \
+              --region $AWS_REGION)
+            echo "Instance $INSTANCE_ID state: $STATE"
+            if [ "$STATE" = "running" ]; then
+              echo "Stopping instance before teardown..."
+              aws ec2 stop-instances --instance-ids $INSTANCE_ID --region $AWS_REGION
+              aws ec2 wait instance-stopped --instance-ids $INSTANCE_ID --region $AWS_REGION
+              echo "Instance stopped."
+            fi
+          else
+            echo "No EC2 instance found in stack outputs."
+          fi
+
+      - name: Empty S3 bucket
+        run: |
+          echo "Emptying s3://$S3_BUCKET ..."
+          aws s3 rm s3://$S3_BUCKET --recursive --region $AWS_REGION || true
+          echo "Bucket emptied."
+
+      - name: Delete CloudFormation stack
+        run: |
+          echo "Deleting stack $STACK_NAME ..."
+          aws cloudformation delete-stack \
+            --stack-name $STACK_NAME \
+            --region $AWS_REGION
+
+      - name: Wait for stack deletion
+        run: |
+          echo "Waiting for stack deletion (up to 20 minutes)..."
+          aws cloudformation wait stack-delete-complete \
+            --stack-name $STACK_NAME \
+            --region $AWS_REGION
+          echo "Stack deleted."
+
+      - name: Confirm deletion
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].StackStatus' \
+            --output text \
+            --region $AWS_REGION 2>/dev/null || echo "DELETED")
+          echo "Final stack status: $STATUS"
+          echo "All resources removed."

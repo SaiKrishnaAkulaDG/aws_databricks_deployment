@@ -1,0 +1,134 @@
+name: Run Pipeline
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # Daily at 2 AM UTC
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - historical
+      start_date:
+        description: 'Start date (historical mode only) — YYYY-MM-DD'
+        required: false
+        default: '2024-01-01'
+      end_date:
+        description: 'End date (historical mode only) — YYYY-MM-DD'
+        required: false
+        default: '2024-01-06'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+  S3_BUCKET: cc-transaction-databricks-datalake-2026
+  AWS_REGION: us-east-1
+
+jobs:
+  run-pipeline:
+    name: Run Pipeline on EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Start EC2 instance
+        run: |
+          echo "Starting instance $INSTANCE_ID..."
+          aws ec2 start-instances --instance-ids $INSTANCE_ID --region $AWS_REGION
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region $AWS_REGION
+          echo "Instance is running."
+
+      - name: Get EC2 public IP
+        id: get-ip
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text \
+            --region $AWS_REGION)
+          echo "ip=$IP" >> $GITHUB_OUTPUT
+          echo "EC2 IP: $IP"
+
+      - name: Wait for SSH to be ready
+        run: |
+          echo "Waiting 60s for SSH to be ready..."
+          sleep 60
+
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2-key.pem
+          chmod 600 /tmp/ec2-key.pem
+
+      - name: Run pipeline — incremental
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'incremental' }}
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "cd /app && sudo docker compose run --rm pipeline \
+              python -m pipeline.pipeline --mode incremental 2>&1"
+
+      - name: Run pipeline — historical
+        if: ${{ github.event.inputs.mode == 'historical' }}
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "cd /app && sudo docker compose run --rm pipeline \
+              python -m pipeline.pipeline \
+              --mode historical \
+              --start-date ${{ github.event.inputs.start_date }} \
+              --end-date ${{ github.event.inputs.end_date }} 2>&1"
+
+      - name: Verify pipeline outputs
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "sudo docker compose -f /app/docker-compose.yml run --rm pipeline python -c \"
+          import duckdb
+          con = duckdb.connect()
+          watermark = con.execute(\\\"SELECT last_processed_date FROM read_parquet('/app/data/pipeline/control.parquet')\\\").fetchone()[0]
+          bronze   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/bronze/transactions/**/*.parquet')\\\").fetchone()[0]
+          silver   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/silver/transactions/**/*.parquet')\\\").fetchone()[0]
+          gold_d   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/gold/daily_summary/data.parquet')\\\").fetchone()[0]
+          print(f'Watermark : {watermark}')
+          print(f'Bronze txns: {bronze}')
+          print(f'Silver txns: {silver}')
+          print(f'Gold daily : {gold_d}')
+          \" 2>&1 | grep -v warning"
+
+      - name: Sync data to S3
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "/home/ubuntu/.local/bin/aws s3 sync /app/data/bronze   s3://$S3_BUCKET/bronze/   --region $AWS_REGION &&
+             /home/ubuntu/.local/bin/aws s3 sync /app/data/silver   s3://$S3_BUCKET/silver/   --region $AWS_REGION &&
+             /home/ubuntu/.local/bin/aws s3 sync /app/data/gold     s3://$S3_BUCKET/gold/     --region $AWS_REGION &&
+             /home/ubuntu/.local/bin/aws s3 sync /app/data/pipeline s3://$S3_BUCKET/pipeline/ --region $AWS_REGION &&
+             echo 'S3 sync complete'"
+
+      - name: Stop EC2 instance
+        if: always()
+        run: |
+          echo "Stopping instance $INSTANCE_ID..."
+          aws ec2 stop-instances --instance-ids $INSTANCE_ID --region $AWS_REGION
+          echo "Instance stopping."
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f /tmp/ec2-key.pem
