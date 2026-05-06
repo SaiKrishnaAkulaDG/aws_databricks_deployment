@@ -85,14 +85,15 @@ check_prerequisites() {
     fi
     log_success "S3 bucket name format valid: $S3_BUCKET_NAME"
 
-    # Check S3 bucket name uniqueness
-    if aws s3 ls "s3://$S3_BUCKET_NAME" 2>&1 | grep -q 'NoSuchBucket'; then
-        log_success "S3 bucket name available (will be created)"
-    elif aws s3 ls "s3://$S3_BUCKET_NAME" &> /dev/null; then
-        log_warn "S3 bucket already exists: $S3_BUCKET_NAME"
+    # Check S3 bucket name availability
+    bucket_check=$(aws s3api head-bucket --bucket "$S3_BUCKET_NAME" --region "$REGION" 2>&1)
+    bucket_exit=$?
+    if [ $bucket_exit -eq 0 ]; then
+        log_warn "S3 bucket already exists: $S3_BUCKET_NAME (CloudFormation will reuse it)"
+    elif echo "$bucket_check" | grep -qi "404\|NoSuchBucket\|does not exist"; then
+        log_success "S3 bucket name available (will be created by CloudFormation)"
     else
-        log_error "Could not verify S3 bucket availability"
-        exit 1
+        log_warn "Cannot verify S3 bucket availability — proceeding (CloudFormation will handle it)"
     fi
 }
 
