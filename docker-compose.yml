@@ -12,4 +12,4 @@ services:
     env_file: .env
     environment:
       - DBT_PROFILES_DIR=/app/dbt
-    command: python pipeline/pipeline.py
+    command: python -m pipeline.pipeline

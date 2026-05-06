@@ -626,7 +626,8 @@ def process_gold_step(uncomputed_weeks: list, run_id: str, run_log_buffer: RunLo
 
 
 def finalize_run(uncomputed_weeks: list, end_date: date, run_id: str, run_log_buffer: RunLogBuffer,
-                 control_path: str, weekly_control_path: str, run_log_path: str, fallback_path: str) -> None:
+                 control_path: str, weekly_control_path: str, run_log_path: str, fallback_path: str,
+                 mode: str = "historical") -> None:
     try:
         record_computed_weeks(weekly_control_path, uncomputed_weeks, run_id)
     except Exception as e:
@@ -654,7 +655,7 @@ def finalize_run(uncomputed_weeks: list, end_date: date, run_id: str, run_log_bu
         raise
 
     run_log_buffer.flush(run_log_path)
-    print(f"Historical pipeline completed successfully.")
+    print(f"{mode.capitalize()} pipeline completed successfully.")
 
 
 if __name__ == "__main__":
@@ -697,6 +698,7 @@ if __name__ == "__main__":
 
             try:
                 uncomputed_weeks = get_uncomputed_weeks(SILVER_PATH, WEEKLY_CONTROL_PATH)
+                uncomputed_weeks = [w for w in uncomputed_weeks if w['week_end_date'] <= end_date]
             except Exception as e:
                 run_log_buffer.add_entry(
                     model_name="DBT_COMPILE",
@@ -711,7 +713,7 @@ if __name__ == "__main__":
             if not process_gold_step(uncomputed_weeks, run_id, run_log_buffer, FALLBACK_PATH):
                 sys.exit(1)
 
-            finalize_run(uncomputed_weeks, end_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH)
+            finalize_run(uncomputed_weeks, end_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="historical")
 
         except SystemExit:
             raise
@@ -767,6 +769,7 @@ if __name__ == "__main__":
 
             try:
                 uncomputed_weeks = get_uncomputed_weeks(SILVER_PATH, WEEKLY_CONTROL_PATH)
+                uncomputed_weeks = [w for w in uncomputed_weeks if w['week_end_date'] <= next_date]
             except Exception as e:
                 run_log_buffer.add_entry(
                     model_name="DBT_COMPILE",
@@ -781,7 +784,7 @@ if __name__ == "__main__":
             if not process_gold_step(uncomputed_weeks, run_id, run_log_buffer, FALLBACK_PATH):
                 sys.exit(1)
 
-            finalize_run(uncomputed_weeks, next_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH)
+            finalize_run(uncomputed_weeks, next_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="incremental")
 
         except SystemExit:
             raise
