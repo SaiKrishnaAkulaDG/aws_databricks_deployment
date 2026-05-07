@@ -77,7 +77,14 @@ jobs:
           ssh -i /tmp/ec2-key.pem \
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "cd /app && sudo git pull origin main 2>&1"
+            "cd /app && sudo git fetch origin && sudo git checkout ${{ github.ref_name }} && sudo git pull origin ${{ github.ref_name }} 2>&1"
+
+      - name: Rebuild Docker image
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "cd /app && sudo docker compose build pipeline 2>&1"
 
       - name: Ensure .env exists on EC2
         run: |
