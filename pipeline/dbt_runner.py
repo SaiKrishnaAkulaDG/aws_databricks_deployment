@@ -94,44 +94,56 @@ def stream_dbt_layer(tag: str, run_id: str, model_vars: dict):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     all_lines = []
-    events_yielded = []
+    finish_events = []
 
     for line in proc.stdout:
         all_lines.append(line)
         try:
             event = json.loads(line)
-            info_name = event.get('info', {}).get('name')
-            msg = event.get('info', {}).get('msg', '')
+            info = event.get('info', {})
+            info_name = info.get('name', '')
+            msg = info.get('msg', '') or ''
+            data = event.get('data', {})
+
             if info_name == 'LogStartLine':
-                node_info = event.get('data', {}).get('node_info', {})
-                e = {
+                node_info = data.get('node_info', {})
+                if msg:
+                    print(f"[dbt] {msg}", flush=True)
+                yield {
                     "event": "start",
                     "model": node_info.get('node_name'),
                     "started_at": node_info.get('node_started_at')
                 }
-                events_yielded.append(e)
-                yield e
             elif info_name == 'LogModelResult':
-                node_info = event.get('data', {}).get('node_info', {})
-                e = {
+                node_info = data.get('node_info', {})
+                status = node_info.get('node_status')
+                if msg:
+                    print(f"[dbt] {msg}", flush=True)
+                fe = {
                     "event": "finish",
                     "model": node_info.get('node_name'),
-                    "status": node_info.get('node_status'),
+                    "status": status,
                     "started_at": node_info.get('node_started_at'),
                     "completed_at": node_info.get('node_finished_at')
                 }
-                events_yielded.append(e)
-                yield e
+                finish_events.append(fe)
+                yield fe
             elif msg:
-                # Print any dbt message that isn't a structured start/finish event
                 print(f"[dbt] {info_name}: {msg}", flush=True)
+            elif data:
+                # Print non-empty data payloads for unknown events
+                print(f"[dbt data] {info_name}: {json.dumps(data)[:300]}", flush=True)
         except (json.JSONDecodeError, KeyError, TypeError):
             if line.strip():
                 print(f"[dbt raw] {line.rstrip()}", flush=True)
 
     proc.wait()
     if proc.returncode != 0:
-        print(f"[dbt exit {proc.returncode}] Full output ({len(all_lines)} lines):", flush=True)
+        print(f"[dbt FAILED exit={proc.returncode}] Last 40 lines of output:", flush=True)
         for l in all_lines[-40:]:
-            print(f"  {l.rstrip()}", flush=True)
+            try:
+                ev = json.loads(l)
+                print(f"  [{ev.get('info',{}).get('name','')}] {ev.get('info',{}).get('msg','') or json.dumps(ev.get('data',{}))[:200]}", flush=True)
+            except Exception:
+                print(f"  {l.rstrip()}", flush=True)
     yield {"event": "exit", "returncode": proc.returncode}
