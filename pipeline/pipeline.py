@@ -256,7 +256,18 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             # Create a schema-only placeholder on S3 so the glob() check in silver_accounts.sql
             # succeeds on the first run before any real silver accounts data exists.
             placeholder_key = "silver/accounts/data.parquet"
-            if not s3_key_exists(s3_bucket, placeholder_key):
+            _needs_placeholder = not s3_key_exists(s3_bucket, placeholder_key)
+            if not _needs_placeholder:
+                # Recreate if file exists but has 0 rows — stale empty placeholder from a failed run
+                try:
+                    with duckdb.connect() as _conn:
+                        configure_duckdb_s3(_conn)
+                        _count = _conn.execute(f"SELECT COUNT(*) FROM read_parquet('s3://{s3_bucket}/{placeholder_key}')").fetchone()[0]
+                    if _count == 0:
+                        _needs_placeholder = True
+                except Exception:
+                    pass
+            if _needs_placeholder:
                 try:
                     _placeholder_schema = pa.schema([
                         pa.field('account_id', pa.string()),
