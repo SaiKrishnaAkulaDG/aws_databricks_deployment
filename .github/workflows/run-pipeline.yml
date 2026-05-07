@@ -114,31 +114,18 @@ jobs:
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "sudo docker compose -f /app/docker-compose.yml run --rm pipeline python -c \"
           import duckdb
+          BUCKET = 'cc-transaction-databricks-datalake-2026'
           con = duckdb.connect()
-          watermark = con.execute(\\\"SELECT last_processed_date FROM read_parquet('/app/data/pipeline/control.parquet')\\\").fetchone()[0]
-          bronze   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/bronze/transactions/**/*.parquet')\\\").fetchone()[0]
-          silver   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/silver/transactions/**/*.parquet')\\\").fetchone()[0]
-          gold_d   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('/app/data/gold/daily_summary/data.parquet')\\\").fetchone()[0]
+          con.execute(\\\"INSTALL httpfs; LOAD httpfs; SET s3_region='us-east-1'\\\")
+          watermark = con.execute(\\\"SELECT last_processed_date FROM read_parquet('s3://\\\" + BUCKET + \\\"/pipeline/control.parquet')\\\").fetchone()[0]
+          bronze   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('s3://\\\" + BUCKET + \\\"/bronze/transactions/**/*.parquet')\\\").fetchone()[0]
+          silver   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('s3://\\\" + BUCKET + \\\"/silver/transactions/**/*.parquet')\\\").fetchone()[0]
+          gold_d   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('s3://\\\" + BUCKET + \\\"/gold/daily_summary/*.parquet')\\\").fetchone()[0]
           print(f'Watermark : {watermark}')
           print(f'Bronze txns: {bronze}')
           print(f'Silver txns: {silver}')
           print(f'Gold daily : {gold_d}')
           \" 2>&1 | grep -v warning"
-
-      - name: Sync data to S3
-        run: |
-          ssh -i /tmp/ec2-key.pem \
-            -o StrictHostKeyChecking=no \
-            ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "AWS_CMD=\$(which aws 2>/dev/null || echo /home/ubuntu/.local/bin/aws) &&
-             if [ ! -f \"\$AWS_CMD\" ] && [ \"\$AWS_CMD\" = '/home/ubuntu/.local/bin/aws' ]; then
-               pip install --quiet --user awscli && AWS_CMD=/home/ubuntu/.local/bin/aws
-             fi &&
-             \$AWS_CMD s3 sync /app/data/bronze   s3://$S3_BUCKET/bronze/   --region $AWS_REGION &&
-             \$AWS_CMD s3 sync /app/data/silver   s3://$S3_BUCKET/silver/   --region $AWS_REGION &&
-             \$AWS_CMD s3 sync /app/data/gold     s3://$S3_BUCKET/gold/     --region $AWS_REGION &&
-             \$AWS_CMD s3 sync /app/data/pipeline s3://$S3_BUCKET/pipeline/ --region $AWS_REGION &&
-             echo 'S3 sync complete'"
 
       - name: Stop EC2 instance
         if: always()

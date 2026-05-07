@@ -2,7 +2,7 @@
   config(
     materialized='table',
     post_hook=[
-      "COPY (SELECT transaction_date, total_transactions, total_signed_amount, transactions_by_type, online_transactions, instore_transactions, total_unresolvable_transactions, total_unresolvable_amount, _computed_at, _pipeline_run_id, _source_period_start, _source_period_end FROM main.gold_daily_summary) TO '/app/data/gold/daily_summary/data.parquet' (FORMAT PARQUET)"
+      "COPY (SELECT transaction_date, total_transactions, total_signed_amount, transactions_by_type, online_transactions, instore_transactions, total_unresolvable_transactions, total_unresolvable_amount, _computed_at, _pipeline_run_id, _source_period_start, _source_period_end FROM main.gold_daily_summary) TO 's3://{{ var(\"s3_bucket\") }}/gold/daily_summary/data.parquet' (FORMAT PARQUET)"
     ]
   )
 }}
@@ -12,12 +12,12 @@
 
 WITH silver_txn AS (
     SELECT transaction_date, transaction_code, _is_resolvable, _signed_amount, channel
-    FROM read_parquet('/app/data/silver/transactions/**/*.parquet')
+    FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/transactions/**/*.parquet')
 ),
 
 silver_tc AS (
     SELECT transaction_code, transaction_type
-    FROM read_parquet('/app/data/silver/transaction_codes/data.parquet')
+    FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/transaction_codes/data.parquet')
 ),
 
 period_bounds AS (

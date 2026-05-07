@@ -5,6 +5,7 @@ services:
     build: .
     container_name: pipeline
     working_dir: /app
+    network_mode: host
     volumes:
       - ./source:/app/source:ro
       - ./data:/app/data:rw
@@ -12,4 +13,6 @@ services:
     env_file: .env
     environment:
       - DBT_PROFILES_DIR=/app/dbt
+      - S3_BUCKET=cc-transaction-databricks-datalake-2026
+      - AWS_DEFAULT_REGION=us-east-1
     command: python -m pipeline.pipeline

@@ -8,6 +8,7 @@ and stream_dbt_layer() (real-time dbt event streaming via --log-format json).
 """
 
 import json
+import os
 import subprocess
 from collections import defaultdict, deque
 from io import TextIOBase
@@ -26,7 +27,8 @@ def derive_execution_order() -> dict:
     default_vars = {
         "target_date": "2024-01-01",
         "run_id": "manifest-parse",
-        "target_weeks": "[]"
+        "target_weeks": "[]",
+        "s3_bucket": os.environ.get("S3_BUCKET", "cc-transaction-databricks-datalake-2026")
     }
     result = subprocess.run(
         ['dbt', 'compile', '--project-dir', '/app/dbt', '--profiles-dir', '/app/dbt',

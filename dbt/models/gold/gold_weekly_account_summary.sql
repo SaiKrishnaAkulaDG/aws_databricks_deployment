@@ -6,7 +6,7 @@
     materialized='table',
     post_hook=(
       [
-        "COPY (SELECT week_start_date, week_end_date, account_id, total_purchases, avg_purchase_amount, total_payments, total_fees, total_interest, closing_balance, _computed_at, _pipeline_run_id FROM main.gold_weekly_account_summary) TO '/app/data/gold/weekly_account_summary/data.parquet' (FORMAT PARQUET)"
+        "COPY (SELECT week_start_date, week_end_date, account_id, total_purchases, avg_purchase_amount, total_payments, total_fees, total_interest, closing_balance, _computed_at, _pipeline_run_id FROM main.gold_weekly_account_summary) TO 's3://{{ var(\"s3_bucket\") }}/gold/weekly_account_summary/data.parquet' (FORMAT PARQUET)"
       ]
       if target_weeks_list | length > 0 else []
     )
@@ -37,7 +37,7 @@ WHERE false
 
 {% else %}
 
-{% set weekly_file = '/app/data/gold/weekly_account_summary/data.parquet' %}
+{% set weekly_file = 's3://' ~ var('s3_bucket') ~ '/gold/weekly_account_summary/data.parquet' %}
 {% if execute %}
   {% set file_exists = run_query("SELECT COUNT(*) FROM glob('" ~ weekly_file ~ "')").rows[0][0] > 0 %}
 {% else %}
@@ -55,18 +55,18 @@ WITH target_week_defs AS (
 
 silver_txn AS (
     SELECT account_id, transaction_date, _signed_amount, transaction_code
-    FROM read_parquet('/app/data/silver/transactions/**/*.parquet')
+    FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/transactions/**/*.parquet')
     WHERE _is_resolvable = true
 ),
 
 silver_tc AS (
     SELECT transaction_code, transaction_type
-    FROM read_parquet('/app/data/silver/transaction_codes/data.parquet')
+    FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/transaction_codes/data.parquet')
 ),
 
 silver_accounts AS (
     SELECT account_id, current_balance
-    FROM read_parquet('/app/data/silver/accounts/data.parquet')
+    FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/accounts/data.parquet')
 ),
 
 filtered_txn AS (

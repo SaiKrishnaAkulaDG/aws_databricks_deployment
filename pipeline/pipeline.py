@@ -4,6 +4,7 @@ import sys
 import uuid
 import json
 import duckdb
+import pandas as pd
 from datetime import datetime, date, timedelta
 from pipeline.bronze_accounts import load_bronze_accounts
 from pipeline.bronze_transactions import load_bronze_transactions
@@ -17,32 +18,37 @@ from pipeline.control_plane import (
     record_computed_weeks,
     get_uncomputed_weeks,
 )
+from pipeline.s3_utils import configure_duckdb_s3, s3_key_exists, atomic_parquet_put
 
 
 def generate_run_id() -> str:
     return str(uuid.uuid4())
 
 
-def initialise_control_plane(data_dir: str) -> None:
-    control_path = f"{data_dir}/pipeline/control.parquet"
-    gold_weekly_path = f"{data_dir}/pipeline/gold_weekly_control.parquet"
-    fallback_path = f"{data_dir}/pipeline/pipeline_runlog_fallback.jsonl"
+def initialise_control_plane(s3_bucket: str) -> None:
+    control_path = f"s3://{s3_bucket}/pipeline/control.parquet"
+    gold_weekly_path = f"s3://{s3_bucket}/pipeline/gold_weekly_control.parquet"
+    fallback_path = "/tmp/pipeline_runlog_fallback.jsonl"
 
-    os.makedirs(f"{data_dir}/pipeline", exist_ok=True)
+    control_schema = {
+        'last_processed_date': pd.Series(dtype='object'),
+        'updated_at': pd.Series(dtype='datetime64[ns]'),
+        'updated_by_run_id': pd.Series(dtype='str'),
+    }
+    gold_weekly_schema = {
+        'week_start_date': pd.Series(dtype='object'),
+        'week_end_date': pd.Series(dtype='object'),
+        'computed_at': pd.Series(dtype='datetime64[ns]'),
+        'computed_by_run_id': pd.Series(dtype='str'),
+    }
 
-    control_schema = "(last_processed_date DATE, updated_at TIMESTAMP, updated_by_run_id STRING)"
-    gold_weekly_schema = "(week_start_date DATE, week_end_date DATE, computed_at TIMESTAMP, computed_by_run_id STRING)"
-
-    for target_path, schema, label in [
-        (control_path, control_schema, "control.parquet"),
-        (gold_weekly_path, gold_weekly_schema, "gold_weekly_control.parquet"),
+    for s3_key, schema_dict, label in [
+        (f"pipeline/control.parquet", control_schema, "control.parquet"),
+        (f"pipeline/gold_weekly_control.parquet", gold_weekly_schema, "gold_weekly_control.parquet"),
     ]:
-        if not os.path.exists(target_path):
+        if not s3_key_exists(s3_bucket, s3_key):
             try:
-                conn = duckdb.connect()
-                conn.execute(f"CREATE TABLE temp_init {schema}")
-                conn.execute(f"COPY (SELECT * FROM temp_init) TO '{target_path}' (FORMAT PARQUET)")
-                conn.close()
+                atomic_parquet_put(s3_bucket, s3_key, pd.DataFrame(schema_dict))
                 print(f"Initialised {label}.")
             except Exception as e:
                 with open(fallback_path, "a") as f:
@@ -51,9 +57,10 @@ def initialise_control_plane(data_dir: str) -> None:
                 raise SystemExit(1)
         else:
             try:
-                conn = duckdb.connect()
-                conn.execute(f"SELECT COUNT(*) FROM read_parquet('{target_path}')")
-                conn.close()
+                full_path = f"s3://{s3_bucket}/{s3_key}"
+                with duckdb.connect() as conn:
+                    configure_duckdb_s3(conn)
+                    conn.execute(f"SELECT COUNT(*) FROM read_parquet('{full_path}')")
             except Exception as e:
                 with open(fallback_path, "a") as f:
                     f.write(f'{{"timestamp": "{datetime.utcnow().isoformat()}", "run_id": "N/A", "model_name": "DBT_COMPILE", "layer": "ORCHESTRATION", "status": "FAILED", "error_message": "Corrupt {label}: {str(e)}"}}\n')
@@ -110,6 +117,8 @@ def validate_historical_args_and_files(start_date_str: str, end_date_str: str) -
 
 
 def process_transaction_codes_step(run_id: str, run_log_buffer: RunLogBuffer, fallback_path: str) -> bool:
+    s3_bucket = os.environ["S3_BUCKET"]
+
     try:
         started = datetime.utcnow().isoformat()
         result = load_bronze_transaction_codes(run_id)
@@ -127,7 +136,7 @@ def process_transaction_codes_step(run_id: str, run_log_buffer: RunLogBuffer, fa
 
         silver_started = None
         silver_completed = None
-        for event in stream_dbt_layer("silver_transaction_codes", run_id, {"run_id": run_id}):
+        for event in stream_dbt_layer("silver_transaction_codes", run_id, {"run_id": run_id, "s3_bucket": s3_bucket}):
             if event.get("event") == "start" and event.get("model") == "silver_transaction_codes":
                 silver_started = event.get("started_at")
             elif event.get("event") == "finish" and event.get("model") == "silver_transaction_codes":
@@ -139,10 +148,11 @@ def process_transaction_codes_step(run_id: str, run_log_buffer: RunLogBuffer, fa
                 if event.get("returncode") != 0:
                     raise Exception(f"dbt silver_transaction_codes failed with code {event.get('returncode')}")
 
-        os.makedirs('/app/data/silver/transaction_codes', exist_ok=True)
+        silver_tc_path = f"s3://{s3_bucket}/silver/transaction_codes/data.parquet"
 
         with duckdb.connect() as conn:
-            conn.execute("""
+            configure_duckdb_s3(conn)
+            conn.execute(f"""
                 COPY (
                     SELECT
                         transaction_code,
@@ -155,15 +165,16 @@ def process_transaction_codes_step(run_id: str, run_log_buffer: RunLogBuffer, fa
                         _pipeline_run_id,
                         CURRENT_TIMESTAMP AS _promoted_at
                     FROM read_parquet(
-                        '/app/data/bronze/transaction_codes/data.parquet'
+                        's3://{s3_bucket}/bronze/transaction_codes/data.parquet'
                     )
-                ) TO '/app/data/silver/transaction_codes/data.parquet'
+                ) TO '{silver_tc_path}'
                 (FORMAT PARQUET)
             """)
 
         with duckdb.connect() as conn:
+            configure_duckdb_s3(conn)
             records = conn.execute(
-                "SELECT COUNT(*) FROM read_parquet('/app/data/silver/transaction_codes/data.parquet')"
+                f"SELECT COUNT(*) FROM read_parquet('{silver_tc_path}')"
             ).fetchone()[0]
 
         run_log_buffer.add_entry(
@@ -194,6 +205,7 @@ def process_transaction_codes_step(run_id: str, run_log_buffer: RunLogBuffer, fa
 
 
 def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log_buffer: RunLogBuffer, fallback_path: str) -> bool:
+    s3_bucket = os.environ["S3_BUCKET"]
     current_date = start_date
 
     while current_date <= end_date:
@@ -240,33 +252,26 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             return False
 
         try:
-            os.makedirs('/app/data/silver/accounts', exist_ok=True)
-            os.makedirs(f"/app/data/silver/transactions/date={date_str}", exist_ok=True)
-            os.makedirs(f"/app/data/silver/quarantine/date={date_str}", exist_ok=True)
-
-            # Create placeholder parquet file with correct schema if it doesn't exist.
-            # This allows Jinja2's glob() check in silver_accounts.sql to succeed on first run.
-            placeholder_path = '/app/data/silver/accounts/data.parquet'
-            if not os.path.exists(placeholder_path):
+            # Create a schema-only placeholder on S3 so the glob() check in silver_accounts.sql
+            # succeeds on the first run before any real silver accounts data exists.
+            placeholder_key = "silver/accounts/data.parquet"
+            if not s3_key_exists(s3_bucket, placeholder_key):
                 try:
-                    with duckdb.connect() as conn:
-                        conn.execute(f"""
-                            CREATE TABLE placeholder_schema (
-                                account_id VARCHAR,
-                                customer_name VARCHAR,
-                                account_status VARCHAR,
-                                credit_limit DECIMAL,
-                                current_balance DECIMAL,
-                                open_date DATE,
-                                billing_cycle_start DATE,
-                                billing_cycle_end DATE,
-                                _source_file VARCHAR,
-                                _bronze_ingested_at TIMESTAMP,
-                                _pipeline_run_id VARCHAR,
-                                _record_valid_from TIMESTAMP
-                            )
-                        """)
-                        conn.execute(f"COPY (SELECT * FROM placeholder_schema) TO '{placeholder_path}' (FORMAT PARQUET)")
+                    placeholder_df = pd.DataFrame({
+                        'account_id': pd.Series(dtype='str'),
+                        'customer_name': pd.Series(dtype='str'),
+                        'account_status': pd.Series(dtype='str'),
+                        'credit_limit': pd.Series(dtype='float64'),
+                        'current_balance': pd.Series(dtype='float64'),
+                        'open_date': pd.Series(dtype='object'),
+                        'billing_cycle_start': pd.Series(dtype='object'),
+                        'billing_cycle_end': pd.Series(dtype='object'),
+                        '_source_file': pd.Series(dtype='str'),
+                        '_bronze_ingested_at': pd.Series(dtype='datetime64[ns]'),
+                        '_pipeline_run_id': pd.Series(dtype='str'),
+                        '_record_valid_from': pd.Series(dtype='datetime64[ns]'),
+                    })
+                    atomic_parquet_put(s3_bucket, placeholder_key, placeholder_df)
                 except Exception as e:
                     run_log_buffer.add_entry(
                         model_name="placeholder_creation",
@@ -277,12 +282,10 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
                     )
                     raise
 
-            
-
             silver_started = None
             silver_completed = None
             silver_finished = False
-            for event in stream_dbt_layer("silver_accounts", run_id, {"target_date": date_str, "run_id": run_id}):
+            for event in stream_dbt_layer("silver_accounts", run_id, {"target_date": date_str, "run_id": run_id, "s3_bucket": s3_bucket}):
                 if event.get("event") == "start" and event.get("model") == "silver_accounts":
                     silver_started = event.get("started_at")
                 elif event.get("event") == "finish" and event.get("model") == "silver_accounts":
@@ -298,12 +301,15 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             if not silver_finished:
                 raise Exception(f"dbt silver_accounts: missing finish event")
 
+            silver_accounts_path = f"s3://{s3_bucket}/silver/accounts/data.parquet"
             with duckdb.connect() as conn:
+                configure_duckdb_s3(conn)
                 records_written = conn.execute(
-                    "SELECT COUNT(*) FROM read_parquet('/app/data/silver/accounts/data.parquet')"
+                    f"SELECT COUNT(*) FROM read_parquet('{silver_accounts_path}')"
                 ).fetchone()[0]
 
             with duckdb.connect() as conn:
+                configure_duckdb_s3(conn)
                 rejected = conn.execute(f"""
                     SELECT
                         account_id, customer_name, account_status,
@@ -326,7 +332,7 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
                                 THEN 'INVALID_ACCOUNT_STATUS'
                         END AS _rejection_reason
                     FROM read_parquet(
-                        '/app/data/bronze/accounts/date={date_str}/data.parquet'
+                        's3://{s3_bucket}/bronze/accounts/date={date_str}/data.parquet'
                     )
                     WHERE account_id IS NULL OR account_id = ''
                        OR open_date IS NULL OR credit_limit IS NULL
@@ -339,15 +345,9 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
                 """).fetchdf()
 
             if len(rejected) > 0:
-                os.makedirs(
-                    f'/app/data/silver/quarantine/date={date_str}',
-                    exist_ok=True
-                )
-                quarantine_path = (
-                    f'/app/data/silver/quarantine/date={date_str}'
-                    f'/rejected_accounts.parquet'
-                )
+                quarantine_path = f"s3://{s3_bucket}/silver/quarantine/date={date_str}/rejected_accounts.parquet"
                 with duckdb.connect() as conn:
+                    configure_duckdb_s3(conn)
                     conn.register('rejected_df', rejected)
                     conn.execute(f"""
                         COPY (SELECT * FROM rejected_df)
@@ -435,7 +435,7 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             silver_started = None
             silver_completed = None
             silver_finished = False
-            for event in stream_dbt_layer("silver_transactions", run_id, {"target_date": date_str, "run_id": run_id}):
+            for event in stream_dbt_layer("silver_transactions", run_id, {"target_date": date_str, "run_id": run_id, "s3_bucket": s3_bucket}):
                 if event.get("event") == "start" and event.get("model") == "silver_transactions":
                     silver_started = event.get("started_at")
                 elif event.get("event") == "finish" and event.get("model") == "silver_transactions":
@@ -451,18 +451,21 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             if not silver_finished:
                 raise Exception(f"dbt silver_transactions: missing finish event")
 
+            silver_txn_path = f"s3://{s3_bucket}/silver/transactions/date={date_str}/*.parquet"
             with duckdb.connect() as conn:
+                configure_duckdb_s3(conn)
                 records_written = conn.execute(
-                    f"SELECT COUNT(*) FROM read_parquet('/app/data/silver/transactions/date={date_str}/*.parquet')"
+                    f"SELECT COUNT(*) FROM read_parquet('{silver_txn_path}')"
                 ).fetchone()[0]
 
-            quarantine_path = f'/app/data/silver/quarantine/date={date_str}/rejected_transactions.parquet'
-            if os.path.exists(quarantine_path):
+            quarantine_path = f"s3://{s3_bucket}/silver/quarantine/date={date_str}/rejected_transactions.parquet"
+            try:
                 with duckdb.connect() as conn:
+                    configure_duckdb_s3(conn)
                     records_rejected = conn.execute(
                         f"SELECT COUNT(*) FROM read_parquet('{quarantine_path}')"
                     ).fetchone()[0]
-            else:
+            except Exception:
                 records_rejected = 0
 
             run_log_buffer.add_entry(
@@ -504,6 +507,8 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
 
 
 def process_gold_step(uncomputed_weeks: list, run_id: str, run_log_buffer: RunLogBuffer, fallback_path: str) -> bool:
+    s3_bucket = os.environ["S3_BUCKET"]
+
     try:
         target_weeks_json = json.dumps([
             {
@@ -520,47 +525,41 @@ def process_gold_step(uncomputed_weeks: list, run_id: str, run_log_buffer: RunLo
         weekly_completed = None
         weekly_finished = False
 
-        os.makedirs('/app/data/gold/daily_summary', exist_ok=True)
-        os.makedirs('/app/data/gold/weekly_account_summary', exist_ok=True)
+        # Create schema-only placeholder on S3 so glob() checks in gold models succeed on first run.
+        daily_key = "gold/daily_summary/data.parquet"
+        if not s3_key_exists(s3_bucket, daily_key):
+            atomic_parquet_put(s3_bucket, daily_key, pd.DataFrame({
+                'transaction_date': pd.Series(dtype='object'),
+                'total_transactions': pd.Series(dtype='int64'),
+                'total_signed_amount': pd.Series(dtype='float64'),
+                'transactions_by_type': pd.Series(dtype='object'),
+                'online_transactions': pd.Series(dtype='int64'),
+                'instore_transactions': pd.Series(dtype='int64'),
+                'total_unresolvable_transactions': pd.Series(dtype='int64'),
+                'total_unresolvable_amount': pd.Series(dtype='float64'),
+                '_computed_at': pd.Series(dtype='datetime64[ns]'),
+                '_pipeline_run_id': pd.Series(dtype='str'),
+                '_source_period_start': pd.Series(dtype='object'),
+                '_source_period_end': pd.Series(dtype='object'),
+            }))
 
-        daily_placeholder = '/app/data/gold/daily_summary/data.parquet'
-        if not os.path.exists(daily_placeholder):
-            with duckdb.connect() as conn:
-                conn.execute("""CREATE TABLE gd1 (
-                    transaction_date DATE,
-                    total_transactions BIGINT,
-                    total_signed_amount DOUBLE,
-                    transactions_by_type JSON,
-                    online_transactions BIGINT,
-                    instore_transactions BIGINT,
-                    total_unresolvable_transactions BIGINT,
-                    total_unresolvable_amount DOUBLE,
-                    _computed_at TIMESTAMP,
-                    _pipeline_run_id VARCHAR,
-                    _source_period_start DATE,
-                    _source_period_end DATE
-                )""")
-                conn.execute(f"COPY (SELECT * FROM gd1) TO '{daily_placeholder}' (FORMAT PARQUET)")
+        weekly_key = "gold/weekly_account_summary/data.parquet"
+        if not s3_key_exists(s3_bucket, weekly_key):
+            atomic_parquet_put(s3_bucket, weekly_key, pd.DataFrame({
+                'week_start_date': pd.Series(dtype='object'),
+                'week_end_date': pd.Series(dtype='object'),
+                'account_id': pd.Series(dtype='str'),
+                'total_purchases': pd.Series(dtype='int64'),
+                'avg_purchase_amount': pd.Series(dtype='float64'),
+                'total_payments': pd.Series(dtype='float64'),
+                'total_fees': pd.Series(dtype='float64'),
+                'total_interest': pd.Series(dtype='float64'),
+                'closing_balance': pd.Series(dtype='float64'),
+                '_computed_at': pd.Series(dtype='datetime64[ns]'),
+                '_pipeline_run_id': pd.Series(dtype='str'),
+            }))
 
-        weekly_placeholder = '/app/data/gold/weekly_account_summary/data.parquet'
-        if not os.path.exists(weekly_placeholder):
-            with duckdb.connect() as conn:
-                conn.execute("""CREATE TABLE gw1 (
-                    week_start_date DATE,
-                    week_end_date DATE,
-                    account_id VARCHAR,
-                    total_purchases BIGINT,
-                    avg_purchase_amount DOUBLE,
-                    total_payments DOUBLE,
-                    total_fees DOUBLE,
-                    total_interest DOUBLE,
-                    closing_balance DOUBLE,
-                    _computed_at TIMESTAMP,
-                    _pipeline_run_id VARCHAR
-                )""")
-                conn.execute(f"COPY (SELECT * FROM gw1) TO '{weekly_placeholder}' (FORMAT PARQUET)")
-
-        for event in stream_dbt_layer("tag:gold", run_id, {"run_id": run_id, "target_weeks": target_weeks_json}):
+        for event in stream_dbt_layer("tag:gold", run_id, {"run_id": run_id, "target_weeks": target_weeks_json, "s3_bucket": s3_bucket}):
             if event.get("event") == "start" and event.get("model") == "gold_daily_summary":
                 daily_started = event.get("started_at")
             elif event.get("event") == "finish" and event.get("model") == "gold_daily_summary":
@@ -585,11 +584,12 @@ def process_gold_step(uncomputed_weeks: list, run_id: str, run_log_buffer: RunLo
             raise Exception(f"dbt gold layer: missing finish events for daily={daily_finished}, weekly={weekly_finished}")
 
         with duckdb.connect() as conn:
+            configure_duckdb_s3(conn)
             daily_records = conn.execute(
-                "SELECT COUNT(*) FROM read_parquet('/app/data/gold/daily_summary/*.parquet')"
+                f"SELECT COUNT(*) FROM read_parquet('s3://{s3_bucket}/gold/daily_summary/*.parquet')"
             ).fetchone()[0]
             weekly_records = conn.execute(
-                "SELECT COUNT(*) FROM read_parquet('/app/data/gold/weekly_account_summary/*.parquet')"
+                f"SELECT COUNT(*) FROM read_parquet('s3://{s3_bucket}/gold/weekly_account_summary/*.parquet')"
             ).fetchone()[0]
 
         run_log_buffer.add_entry(
@@ -661,13 +661,15 @@ def finalize_run(uncomputed_weeks: list, end_date: date, run_id: str, run_log_bu
 if __name__ == "__main__":
     args = parse_args()
     run_id = generate_run_id()
-    initialise_control_plane("/app/data")
 
-    CONTROL_PATH = "/app/data/pipeline/control.parquet"
-    WEEKLY_CONTROL_PATH = "/app/data/pipeline/gold_weekly_control.parquet"
-    RUN_LOG_PATH = "/app/data/pipeline/run_log.parquet"
-    FALLBACK_PATH = "/app/data/pipeline/pipeline_runlog_fallback.jsonl"
-    SILVER_PATH = "/app/data/silver/transactions"
+    S3_BUCKET = os.environ["S3_BUCKET"]
+    initialise_control_plane(S3_BUCKET)
+
+    CONTROL_PATH        = f"s3://{S3_BUCKET}/pipeline/control.parquet"
+    WEEKLY_CONTROL_PATH = f"s3://{S3_BUCKET}/pipeline/gold_weekly_control.parquet"
+    RUN_LOG_PATH        = f"s3://{S3_BUCKET}/pipeline/run_log.parquet"
+    FALLBACK_PATH       = "/tmp/pipeline_runlog_fallback.jsonl"
+    SILVER_PATH         = f"s3://{S3_BUCKET}/silver/transactions"
 
     if args.mode == "historical":
         try:
@@ -713,37 +715,17 @@ if __name__ == "__main__":
             if not process_gold_step(uncomputed_weeks, run_id, run_log_buffer, FALLBACK_PATH):
                 sys.exit(1)
 
-            finalize_run(uncomputed_weeks, end_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="historical")
+            finalize_run(uncomputed_weeks, end_date, run_id, run_log_buffer,
+                         CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="historical")
 
         except SystemExit:
             raise
         except Exception as e:
-            print(f"ORCHESTRATION ERROR: {e}")
-            try:
-                run_log_buffer.add_orchestration_failure(str(e))
-                run_log_buffer.flush(FALLBACK_PATH)
-            except:
-                pass
+            print(f"FATAL: {e}")
             sys.exit(1)
 
     elif args.mode == "incremental":
-        run_log_buffer = None
         try:
-            watermark = get_watermark(CONTROL_PATH)
-            if watermark is None:
-                print("ERROR: Historical pipeline must be run first.")
-                sys.exit(1)
-
-            next_date = watermark + timedelta(days=1)
-            next_date_str = next_date.strftime("%Y-%m-%d")
-
-            accounts_file = f"/app/source/accounts_{next_date_str}.csv"
-            transactions_file = f"/app/source/transactions_{next_date_str}.csv"
-
-            if not os.path.exists(accounts_file) or not os.path.exists(transactions_file):
-                print(f"No source files for {next_date_str} — no-op exit.")
-                sys.exit(0)
-
             run_log_buffer = RunLogBuffer(run_id, "incremental")
 
             try:
@@ -762,14 +744,35 @@ if __name__ == "__main__":
                 print(f"CONTROL PLANE ERROR: {e}")
                 sys.exit(1)
 
-            if not process_date_sequence(next_date, next_date, run_id, run_log_buffer, FALLBACK_PATH):
-                run_log_buffer.add_skipped("gold_daily_summary", "GOLD", target_date=next_date_str)
-                run_log_buffer.add_skipped("gold_weekly_account_summary", "GOLD", target_date=next_date_str)
+            try:
+                watermark = get_watermark(CONTROL_PATH)
+                if watermark is None:
+                    print("ERROR: No watermark found. Run historical mode first.")
+                    sys.exit(1)
+                next_date = watermark + timedelta(days=1)
+                end_date = next_date
+            except Exception as e:
+                run_log_buffer.add_entry(
+                    model_name="DBT_COMPILE",
+                    layer="ORCHESTRATION",
+                    status="FAILED",
+                    error_message=f"Watermark read failed: {e}"
+                )
+                run_log_buffer.flush(FALLBACK_PATH)
+                print(f"WATERMARK ERROR: {e}")
+                sys.exit(1)
+
+            print(f"Incremental run for date: {next_date}")
+
+            if not process_transaction_codes_step(run_id, run_log_buffer, FALLBACK_PATH):
+                sys.exit(1)
+
+            if not process_date_sequence(next_date, end_date, run_id, run_log_buffer, FALLBACK_PATH):
                 sys.exit(1)
 
             try:
                 uncomputed_weeks = get_uncomputed_weeks(SILVER_PATH, WEEKLY_CONTROL_PATH)
-                uncomputed_weeks = [w for w in uncomputed_weeks if w['week_end_date'] <= next_date]
+                uncomputed_weeks = [w for w in uncomputed_weeks if w['week_end_date'] <= end_date]
             except Exception as e:
                 run_log_buffer.add_entry(
                     model_name="DBT_COMPILE",
@@ -784,16 +787,11 @@ if __name__ == "__main__":
             if not process_gold_step(uncomputed_weeks, run_id, run_log_buffer, FALLBACK_PATH):
                 sys.exit(1)
 
-            finalize_run(uncomputed_weeks, next_date, run_id, run_log_buffer, CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="incremental")
+            finalize_run(uncomputed_weeks, end_date, run_id, run_log_buffer,
+                         CONTROL_PATH, WEEKLY_CONTROL_PATH, RUN_LOG_PATH, FALLBACK_PATH, mode="incremental")
 
         except SystemExit:
             raise
         except Exception as e:
-            print(f"ORCHESTRATION ERROR: {e}")
-            if run_log_buffer is not None:
-                try:
-                    run_log_buffer.add_orchestration_failure(str(e))
-                    run_log_buffer.flush(FALLBACK_PATH)
-                except Exception as log_err:
-                    print(f"WARNING: Could not flush run log: {log_err}")
+            print(f"FATAL: {e}")
             sys.exit(1)

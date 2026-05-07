@@ -14,6 +14,7 @@ from typing import Optional
 import duckdb
 import pandas as pd
 import numpy as np
+from pipeline.s3_utils import configure_duckdb_s3, atomic_parquet_put, parse_s3_uri
 
 
 class RunLogBuffer:
@@ -64,28 +65,32 @@ class RunLogBuffer:
 
     def flush(self, target_path: str):
         """
-        Flush buffer to parquet. Appends without overwriting (INV-19).
-        On exception, writes buffer to fallback .jsonl and re-raises.
+        Flush buffer to parquet on S3. Appends without overwriting (INV-19).
+        On exception, writes buffer to local fallback .jsonl and re-raises.
         Clears buffer after flush (success or failure) to prevent re-append on subsequent calls.
         """
         try:
             df_buffer = pd.DataFrame(self._buffer)
 
-            if os.path.exists(target_path):
+            bucket, key = parse_s3_uri(target_path)
+
+            try:
                 with duckdb.connect() as conn:
+                    configure_duckdb_s3(conn)
                     df_existing = conn.execute(f"SELECT * FROM read_parquet('{target_path}')").df()
                 df_combined = pd.concat([df_existing, df_buffer], ignore_index=True)
-            else:
-                df_combined = df_buffer
+            except Exception as e:
+                if "No files found" in str(e) or isinstance(e, FileNotFoundError):
+                    df_combined = df_buffer
+                else:
+                    raise
 
-            with duckdb.connect() as conn:
-                conn.execute(f"COPY df_combined TO '{target_path}' (FORMAT PARQUET)")
+            atomic_parquet_put(bucket, key, df_combined)
 
             self._buffer = []
 
         except Exception as e:
-            fallback_path = "/app/data/pipeline/pipeline_runlog_fallback.jsonl"
-            os.makedirs(os.path.dirname(fallback_path), exist_ok=True)
+            fallback_path = "/tmp/pipeline_runlog_fallback.jsonl"
             with open(fallback_path, "a") as f:
                 for entry in self._buffer:
                     f.write(json.dumps(entry) + "\n")
@@ -101,6 +106,7 @@ class RunLogBuffer:
         """
         try:
             with duckdb.connect() as conn:
+                configure_duckdb_s3(conn)
                 rows = conn.execute(f"SELECT updated_by_run_id FROM read_parquet('{control_path}')").fetchall()
         except Exception as e:
             if "No files found" in str(e) or isinstance(e, FileNotFoundError):
@@ -118,13 +124,16 @@ class RunLogBuffer:
         if pd.isna(prior_run_id):
             raise ValueError("control.parquet: updated_by_run_id is NULL — schema violation, INV-43 halt required")
 
-        if not os.path.exists(run_log_path):
-            return prior_run_id
-
-        with duckdb.connect() as conn:
-            count = conn.execute(
-                f"SELECT COUNT(*) FROM read_parquet('{run_log_path}') WHERE run_id = '{prior_run_id}'"
-            ).fetchone()[0]
+        try:
+            with duckdb.connect() as conn:
+                configure_duckdb_s3(conn)
+                count = conn.execute(
+                    f"SELECT COUNT(*) FROM read_parquet('{run_log_path}') WHERE run_id = '{prior_run_id}'"
+                ).fetchone()[0]
+        except Exception as e:
+            if "No files found" in str(e) or isinstance(e, FileNotFoundError):
+                return prior_run_id
+            raise
 
         if count == 0:
             return prior_run_id

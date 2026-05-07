@@ -13,7 +13,7 @@ WITH bronze_tc AS (
     _ingested_at AS _bronze_ingested_at,
     _pipeline_run_id,
     CURRENT_TIMESTAMP AS _promoted_at
-  FROM read_parquet('/app/data/bronze/transaction_codes/data.parquet')
+  FROM read_parquet('s3://{{ var("s3_bucket") }}/bronze/transaction_codes/data.parquet')
 )
 
 SELECT * FROM bronze_tc

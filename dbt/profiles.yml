@@ -4,4 +4,8 @@ credit_card_lake:
     dev:
       type: duckdb
       path: /app/data/lake.duckdb
-      extensions: [parquet]
+      extensions:
+        - parquet
+        - httpfs
+      settings:
+        s3_region: us-east-1

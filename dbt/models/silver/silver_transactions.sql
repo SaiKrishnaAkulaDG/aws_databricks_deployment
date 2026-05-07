@@ -2,19 +2,19 @@
   config(
     materialized='table',
     post_hook=[
-      "COPY (SELECT transaction_id, account_id, transaction_date, amount, transaction_code, merchant_name, channel, _source_file, _bronze_ingested_at, _pipeline_run_id, _promoted_at, _is_resolvable, _signed_amount, _missing_merchant_name FROM main.silver_transactions WHERE _rejection_reason IS NULL) TO '/app/data/silver/transactions/date={{ var(\"target_date\") }}/data.parquet' (FORMAT PARQUET)",
-      "COPY (SELECT transaction_id, account_id, transaction_date, amount, transaction_code, merchant_name, channel, _source_file, _pipeline_run_id, _rejected_at, _rejection_reason FROM main.silver_transactions WHERE _rejection_reason IS NOT NULL) TO '/app/data/silver/quarantine/date={{ var(\"target_date\") }}/rejected.parquet' (FORMAT PARQUET)",
-      "SELECT CASE WHEN (SELECT COUNT(*) FROM read_parquet('/app/data/bronze/transactions/date={{ var(\"target_date\") }}/data.parquet')) != (SELECT COUNT(*) FROM read_parquet('/app/data/silver/transactions/date={{ var(\"target_date\") }}/data.parquet')) + (SELECT COUNT(*) FROM read_parquet('/app/data/silver/quarantine/date={{ var(\"target_date\") }}/rejected.parquet')) THEN error('INV-05 FAIL: bronze_count != silver_count + quarantine_count for date={{ var(\"target_date\") }}') END"
+      "COPY (SELECT transaction_id, account_id, transaction_date, amount, transaction_code, merchant_name, channel, _source_file, _bronze_ingested_at, _pipeline_run_id, _promoted_at, _is_resolvable, _signed_amount, _missing_merchant_name FROM main.silver_transactions WHERE _rejection_reason IS NULL) TO 's3://{{ var(\"s3_bucket\") }}/silver/transactions/date={{ var(\"target_date\") }}/data.parquet' (FORMAT PARQUET)",
+      "COPY (SELECT transaction_id, account_id, transaction_date, amount, transaction_code, merchant_name, channel, _source_file, _pipeline_run_id, _rejected_at, _rejection_reason FROM main.silver_transactions WHERE _rejection_reason IS NOT NULL) TO 's3://{{ var(\"s3_bucket\") }}/silver/quarantine/date={{ var(\"target_date\") }}/rejected.parquet' (FORMAT PARQUET)",
+      "SELECT CASE WHEN (SELECT COUNT(*) FROM read_parquet('s3://{{ var(\"s3_bucket\") }}/bronze/transactions/date={{ var(\"target_date\") }}/data.parquet')) != (SELECT COUNT(*) FROM read_parquet('s3://{{ var(\"s3_bucket\") }}/silver/transactions/date={{ var(\"target_date\") }}/data.parquet')) + (SELECT COUNT(*) FROM read_parquet('s3://{{ var(\"s3_bucket\") }}/silver/quarantine/date={{ var(\"target_date\") }}/rejected.parquet')) THEN error('INV-05 FAIL: bronze_count != silver_count + quarantine_count for date={{ var(\"target_date\") }}') END"
     ]
   )
 }}
 
 WITH bronze_source AS (
-  SELECT * FROM read_parquet('/app/data/bronze/transactions/date={{ var("target_date") }}/data.parquet')
+  SELECT * FROM read_parquet('s3://{{ var("s3_bucket") }}/bronze/transactions/date={{ var("target_date") }}/data.parquet')
 ),
 
 existing_silver_ids AS (
-  {% set silver_glob = '/app/data/silver/transactions/**/*.parquet' %}
+  {% set silver_glob = 's3://' ~ var('s3_bucket') ~ '/silver/transactions/**/*.parquet' %}
   {% if execute %}
     {% set silver_exists = run_query("SELECT COUNT(*) FROM glob('" ~ silver_glob ~ "')").rows[0][0] > 0 %}
   {% else %}
@@ -32,12 +32,12 @@ existing_silver_ids AS (
 
 silver_tc AS (
   SELECT transaction_code, debit_credit_indicator, transaction_type
-  FROM read_parquet('/app/data/silver/transaction_codes/data.parquet')
+  FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/transaction_codes/data.parquet')
 ),
 
 silver_accounts AS (
   SELECT account_id
-  FROM read_parquet('/app/data/silver/accounts/data.parquet')
+  FROM read_parquet('s3://{{ var("s3_bucket") }}/silver/accounts/data.parquet')
 ),
 
 quality_classified AS (

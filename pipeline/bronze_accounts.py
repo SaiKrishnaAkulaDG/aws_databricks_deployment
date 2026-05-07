@@ -1,28 +1,21 @@
 import os
 import duckdb
-from pathlib import Path
+from pipeline.s3_utils import configure_duckdb_s3, s3_key_exists
 
 
 def load_bronze_accounts(date_str: str, run_id: str) -> dict:
     """Load accounts CSV to Bronze layer with idempotency and audit columns."""
-
+    bucket = os.environ["S3_BUCKET"]
     source_path = f"/app/source/accounts_{date_str}.csv"
-    target_dir = f"/app/data/bronze/accounts/date={date_str}"
-    target_path = f"{target_dir}/data.parquet"
-    temp_path = f"{target_dir}/.data.parquet.tmp"
+    s3_key = f"bronze/accounts/date={date_str}/data.parquet"
+    target_path = f"s3://{bucket}/{s3_key}"
 
-    # Idempotency gate: check if target file exists
-    if os.path.exists(target_path):
+    if s3_key_exists(bucket, s3_key):
         return {"records_written": 0, "skipped": True, "source_file": source_path}
 
-    # Create target directory
-    os.makedirs(target_dir, exist_ok=True)
-
-    # Atomic write using DuckDB
     basename = os.path.basename(source_path)
-    conn = duckdb.connect()
-
-    try:
+    with duckdb.connect() as conn:
+        configure_duckdb_s3(conn)
         conn.execute(f"""
             COPY (
                 SELECT *,
@@ -31,19 +24,11 @@ def load_bronze_accounts(date_str: str, run_id: str) -> dict:
                     '{run_id}' AS _pipeline_run_id
                 FROM read_csv_auto('{source_path}')
             )
-            TO '{temp_path}' (FORMAT PARQUET)
+            TO '{target_path}' (FORMAT PARQUET)
         """)
-        os.rename(temp_path, target_path)
-    except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        raise e
-    finally:
-        conn.close()
 
-    # Get row count
-    conn = duckdb.connect()
-    row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{target_path}')").fetchone()[0]
-    conn.close()
+    with duckdb.connect() as conn:
+        configure_duckdb_s3(conn)
+        row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{target_path}')").fetchone()[0]
 
     return {"records_written": row_count, "skipped": False, "source_file": source_path}

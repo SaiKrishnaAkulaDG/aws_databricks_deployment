@@ -2,7 +2,7 @@
   config(
     materialized='table',
     post_hook=[
-      "COPY (SELECT * FROM main.silver_accounts) TO '/app/data/silver/accounts/data.parquet' (FORMAT PARQUET);"
+      "COPY (SELECT * FROM main.silver_accounts) TO 's3://{{ var(\"s3_bucket\") }}/silver/accounts/data.parquet' (FORMAT PARQUET);"
     ]
   )
 }}
@@ -31,7 +31,7 @@ WITH step1_quality_check AS (
         THEN 'INVALID_ACCOUNT_STATUS'
       ELSE NULL
     END AS _rejection_reason
-  FROM read_parquet('/app/data/bronze/accounts/date={{ var("target_date") }}/data.parquet')
+  FROM read_parquet('s3://{{ var("s3_bucket") }}/bronze/accounts/date={{ var("target_date") }}/data.parquet')
 ),
 
 step2_rejected AS (
@@ -73,7 +73,7 @@ step3a_incoming_passing AS (
 ),
 
 step3b_existing AS (
-  {% set silver_file = '/app/data/silver/accounts/data.parquet' %}
+  {% set silver_file = 's3://' ~ var('s3_bucket') ~ '/silver/accounts/data.parquet' %}
   {% if execute %}
     {% set file_exists = run_query("SELECT COUNT(*) FROM glob('" ~ silver_file ~ "')").rows[0][0] > 0 %}
   {% else %}
