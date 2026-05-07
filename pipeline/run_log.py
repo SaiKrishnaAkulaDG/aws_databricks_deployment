@@ -88,7 +88,8 @@ class RunLogBuffer:
                     df_existing = conn.execute(f"SELECT * FROM read_parquet('{target_path}')").df()
                 df_combined = pd.concat([df_existing, df_buffer], ignore_index=True)
             except Exception as e:
-                if "No files found" in str(e) or isinstance(e, FileNotFoundError):
+                err_str = str(e)
+                if "No files found" in err_str or "404" in err_str or isinstance(e, FileNotFoundError):
                     df_combined = df_buffer
                 else:
                     raise
