@@ -5,6 +5,7 @@ import uuid
 import json
 import duckdb
 import pandas as pd
+import pyarrow as pa
 from datetime import datetime, date, timedelta
 from pipeline.bronze_accounts import load_bronze_accounts
 from pipeline.bronze_transactions import load_bronze_transactions
@@ -257,21 +258,26 @@ def process_date_sequence(start_date: date, end_date: date, run_id: str, run_log
             placeholder_key = "silver/accounts/data.parquet"
             if not s3_key_exists(s3_bucket, placeholder_key):
                 try:
-                    placeholder_df = pd.DataFrame({
-                        'account_id': pd.Series(dtype='str'),
-                        'customer_name': pd.Series(dtype='str'),
-                        'account_status': pd.Series(dtype='str'),
-                        'credit_limit': pd.Series(dtype='float64'),
-                        'current_balance': pd.Series(dtype='float64'),
-                        'open_date': pd.Series(dtype='object'),
-                        'billing_cycle_start': pd.Series(dtype='object'),
-                        'billing_cycle_end': pd.Series(dtype='object'),
-                        '_source_file': pd.Series(dtype='str'),
-                        '_bronze_ingested_at': pd.Series(dtype='datetime64[ns]'),
-                        '_pipeline_run_id': pd.Series(dtype='str'),
-                        '_record_valid_from': pd.Series(dtype='datetime64[ns]'),
-                    })
-                    atomic_parquet_put(s3_bucket, placeholder_key, placeholder_df)
+                    _placeholder_schema = pa.schema([
+                        pa.field('account_id', pa.string()),
+                        pa.field('customer_name', pa.string()),
+                        pa.field('account_status', pa.string()),
+                        pa.field('credit_limit', pa.float64()),
+                        pa.field('current_balance', pa.float64()),
+                        pa.field('open_date', pa.date32()),
+                        pa.field('billing_cycle_start', pa.date32()),
+                        pa.field('billing_cycle_end', pa.date32()),
+                        pa.field('_source_file', pa.string()),
+                        pa.field('_bronze_ingested_at', pa.timestamp('ns')),
+                        pa.field('_pipeline_run_id', pa.string()),
+                        pa.field('_record_valid_from', pa.timestamp('ns')),
+                    ])
+                    placeholder_table = pa.table(
+                        {name: pa.array([], type=_placeholder_schema.field(name).type)
+                         for name in _placeholder_schema.names},
+                        schema=_placeholder_schema
+                    )
+                    atomic_parquet_put(s3_bucket, placeholder_key, placeholder_table)
                 except Exception as e:
                     run_log_buffer.add_entry(
                         model_name="placeholder_creation",

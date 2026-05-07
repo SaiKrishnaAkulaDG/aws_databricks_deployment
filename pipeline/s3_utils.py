@@ -51,9 +51,9 @@ def s3_key_exists(bucket: str, key: str) -> bool:
         raise
 
 
-def atomic_parquet_put(bucket: str, key: str, df: pd.DataFrame) -> None:
-    """Serialize DataFrame to Parquet bytes and write to S3 in a single PutObject call."""
-    table = pa.Table.from_pandas(df)
+def atomic_parquet_put(bucket: str, key: str, df) -> None:
+    """Serialize DataFrame or pyarrow Table to Parquet bytes and write to S3 in a single PutObject call."""
+    table = df if isinstance(df, pa.Table) else pa.Table.from_pandas(df)
     buf = io.BytesIO()
     pq.write_table(table, buf)
     buf.seek(0)
