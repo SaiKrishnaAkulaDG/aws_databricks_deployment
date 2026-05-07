@@ -113,8 +113,16 @@ def stream_dbt_layer(tag: str, run_id: str, model_vars: dict):
                     "started_at": node_info.get('node_started_at'),
                     "completed_at": node_info.get('node_finished_at')
                 }
+            elif info_name in ('GenericExceptionOnRun', 'LogModelError', 'PrintCancelLine',
+                               'RunningOperationCaughtError', 'RunningOperationUncaughtError'):
+                msg = event.get('info', {}).get('msg', '')
+                if msg:
+                    print(f"[dbt error] {info_name}: {msg}", flush=True)
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     proc.wait()
+    stderr_output = proc.stderr.read().strip()
+    if stderr_output:
+        print(f"[dbt stderr] {stderr_output}", flush=True)
     yield {"event": "exit", "returncode": proc.returncode}
