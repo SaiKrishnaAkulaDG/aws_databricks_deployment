@@ -118,7 +118,8 @@ class RunLogBuffer:
                 configure_duckdb_s3(conn)
                 rows = conn.execute(f"SELECT updated_by_run_id FROM read_parquet('{control_path}')").fetchall()
         except Exception as e:
-            if "No files found" in str(e) or isinstance(e, FileNotFoundError):
+            err = str(e)
+            if "No files found" in err or "404" in err or isinstance(e, FileNotFoundError):
                 return None
             raise
 
@@ -140,7 +141,8 @@ class RunLogBuffer:
                     f"SELECT COUNT(*) FROM read_parquet('{run_log_path}') WHERE run_id = '{prior_run_id}'"
                 ).fetchone()[0]
         except Exception as e:
-            if "No files found" in str(e) or isinstance(e, FileNotFoundError):
+            err = str(e)
+            if "No files found" in err or "404" in err or isinstance(e, FileNotFoundError):
                 return prior_run_id
             raise
 
