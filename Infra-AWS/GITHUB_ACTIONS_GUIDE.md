@@ -1,6 +1,6 @@
 # GitHub Actions Workflows — Operations Guide
 
-**Last updated:** 2026-05-07  
+**Last updated:** 2026-05-07 (v2 — full end-to-end validation complete)  
 **Repo:** `SaiKrishnaAkulaDG/aws_databricks_deployment`  
 **Region:** `us-east-1`
 
@@ -86,10 +86,12 @@ aws cloudformation describe-stacks \
 ### What it does
 1. Starts EC2 instance
 2. Waits 60s for SSH to be ready
-3. Runs pipeline (incremental or historical)
-4. Verifies outputs (watermark, counts)
-5. Syncs data to S3
-6. Stops EC2 (`if: always()` — runs even on failure)
+3. Pulls latest code on EC2 (`git pull origin main`)
+4. Creates `/app/.env` from `.env.example` if absent (first run on fresh EC2)
+5. Runs pipeline (incremental or historical)
+6. Verifies outputs (watermark, counts)
+7. Syncs data to S3 (auto-detects `aws` CLI path, installs if missing)
+8. Stops EC2 (`if: always()` — runs even on failure)
 
 ### Trigger incremental (default)
 ```bash
@@ -230,20 +232,48 @@ sudo docker compose run --rm pipeline \
 
 ### Sync data to S3 manually
 ```bash
-/home/ubuntu/.local/bin/aws s3 sync /app/data/bronze   s3://cc-transaction-databricks-datalake-2026/bronze/
-/home/ubuntu/.local/bin/aws s3 sync /app/data/silver   s3://cc-transaction-databricks-datalake-2026/silver/
-/home/ubuntu/.local/bin/aws s3 sync /app/data/gold     s3://cc-transaction-databricks-datalake-2026/gold/
-/home/ubuntu/.local/bin/aws s3 sync /app/data/pipeline s3://cc-transaction-databricks-datalake-2026/pipeline/
+# Find aws CLI path first (varies by instance)
+which aws || echo "/home/ubuntu/.local/bin/aws"
+
+aws s3 sync /app/data/bronze   s3://cc-transaction-databricks-datalake-2026/bronze/
+aws s3 sync /app/data/silver   s3://cc-transaction-databricks-datalake-2026/silver/
+aws s3 sync /app/data/gold     s3://cc-transaction-databricks-datalake-2026/gold/
+aws s3 sync /app/data/pipeline s3://cc-transaction-databricks-datalake-2026/pipeline/
+```
+
+### Update EC2_INSTANCE_ID secret after redeploy
+Every `deploy-infra` run creates a new EC2 instance with a new ID. Update the secret after each deploy:
+```bash
+# Get new instance ID from CF outputs
+NEW_ID=$(aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --region us-east-1 --profile DG4-Developer-065317679010 \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+
+echo $NEW_ID | gh secret set EC2_INSTANCE_ID
 ```
 
 ---
 
-## Bugs Fixed in This Session
+## Bugs Fixed (2026-05-07 Session)
 
 | # | Workflow | Problem | Fix |
 |---|----------|---------|-----|
 | 1 | deploy-infra | `create-stack` failed if stack already existed | Added create-or-update logic with stack status check |
 | 2 | deploy-infra | `ROLLBACK_COMPLETE` blocked re-deploy | Auto-delete and recreate on ROLLBACK_COMPLETE |
-| 3 | run-pipeline | SSH key `error in libcrypto` | Re-set `EC2_SSH_KEY` secret via `gh secret set < file` to avoid CRLF |
-| 4 | teardown-infra | `DELETE_FAILED` — S3 not empty | Replaced `s3 rm --recursive` with `s3api` version+marker purge |
-| 5 | All | Missing IAM permissions on GitHub Actions role | Added 6 permissions across 5 policy versions (v1→v6) |
+| 3 | run-pipeline | SSH key `error in libcrypto` | Re-set `EC2_SSH_KEY` secret via `gh secret set < file` — copy-paste from UI adds CRLF |
+| 4 | run-pipeline | `EC2_INSTANCE_ID` stale after redeploy | Updated secret to new instance ID; added note in guide |
+| 5 | run-pipeline | `.env` missing on fresh EC2 | Added step to copy `.env.example → .env` if absent |
+| 6 | run-pipeline | Source CSVs missing on EC2 | Fixed corrupt `.gitignore`, committed all `source/` CSV files |
+| 7 | run-pipeline | `aws` CLI not found on new EC2 | Workflow now auto-detects path via `which aws`, installs via pip if missing |
+| 8 | run-pipeline | EC2 had stale code | Added `git pull origin main` step before every pipeline run |
+| 9 | teardown-infra | `DELETE_FAILED` — S3 versioned objects | Replaced `s3 rm --recursive` with `s3api list-object-versions` + `delete-objects` |
+| 10 | All | Missing IAM permissions (6 actions) | Policy updated v1→v6: `UpdateStack`, `TerminateInstances`, `DeleteLogGroup`, `DeleteSecurityGroup`, `TagResource`, `RunInstances`, `CreateTags` |
+
+## Validated Pipeline Results (2026-05-07)
+
+| Run | Mode | Dates | Result |
+|-----|------|-------|--------|
+| run-pipeline | Historical | 2024-01-01 → 2024-01-06 | ✓ Passed — Bronze/Silver/Gold written, S3 synced |
+| run-pipeline | Incremental | 2024-01-07 | ✓ Passed — Watermark advanced to 2024-01-07, S3 synced |
