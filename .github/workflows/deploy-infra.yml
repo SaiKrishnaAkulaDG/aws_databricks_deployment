@@ -43,24 +43,60 @@ jobs:
 
       - name: Deploy CloudFormation stack
         run: |
-          aws cloudformation create-stack \
+          STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name cc-transactions-lake-stack \
-            --template-body file://Infra-AWS/cf-cc-transactions-lake.yaml \
-            --parameters \
-              ParameterKey=S3BucketName,ParameterValue=${{ github.event.inputs.s3_bucket_name }} \
-              ParameterKey=EC2InstanceType,ParameterValue=${{ github.event.inputs.ec2_instance_type }} \
-              ParameterKey=EBSVolumeSize,ParameterValue=${{ github.event.inputs.ebs_volume_size }} \
-              ParameterKey=KeyName,ParameterValue=cc-transactions-lake-key \
-              ParameterKey=GitHubRepoURL,ParameterValue=https://github.com/${{ github.repository }}.git \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region us-east-1
+            --query 'Stacks[0].StackStatus' \
+            --output text \
+            --region us-east-1 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Stack status: $STACK_STATUS"
 
-      - name: Wait for stack creation
+          PARAMS="ParameterKey=S3BucketName,ParameterValue=${{ github.event.inputs.s3_bucket_name }} \
+            ParameterKey=EC2InstanceType,ParameterValue=${{ github.event.inputs.ec2_instance_type }} \
+            ParameterKey=EBSVolumeSize,ParameterValue=${{ github.event.inputs.ebs_volume_size }} \
+            ParameterKey=KeyName,ParameterValue=cc-transactions-lake-key \
+            ParameterKey=GitHubRepoURL,ParameterValue=https://github.com/${{ github.repository }}.git"
+
+          if [ "$STACK_STATUS" = "DOES_NOT_EXIST" ]; then
+            echo "Creating new stack..."
+            aws cloudformation create-stack \
+              --stack-name cc-transactions-lake-stack \
+              --template-body file://Infra-AWS/cf-cc-transactions-lake.yaml \
+              --parameters $PARAMS \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region us-east-1
+            echo "action=created" >> $GITHUB_ENV
+          else
+            echo "Stack exists ($STACK_STATUS) — updating..."
+            UPDATE_OUTPUT=$(aws cloudformation update-stack \
+              --stack-name cc-transactions-lake-stack \
+              --template-body file://Infra-AWS/cf-cc-transactions-lake.yaml \
+              --parameters $PARAMS \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region us-east-1 2>&1 || true)
+            if echo "$UPDATE_OUTPUT" | grep -q "No updates are to be performed"; then
+              echo "No changes detected — stack is up to date."
+              echo "action=no_change" >> $GITHUB_ENV
+            else
+              echo "$UPDATE_OUTPUT"
+              echo "action=updated" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Wait for stack operation to complete
         run: |
-          echo "Waiting for stack creation (up to 20 minutes)..."
-          aws cloudformation wait stack-create-complete \
-            --stack-name cc-transactions-lake-stack \
-            --region us-east-1
+          if [ "$action" = "created" ]; then
+            echo "Waiting for stack creation (up to 20 minutes)..."
+            aws cloudformation wait stack-create-complete \
+              --stack-name cc-transactions-lake-stack \
+              --region us-east-1
+          elif [ "$action" = "updated" ]; then
+            echo "Waiting for stack update (up to 20 minutes)..."
+            aws cloudformation wait stack-update-complete \
+              --stack-name cc-transactions-lake-stack \
+              --region us-east-1
+          else
+            echo "No stack operation to wait for."
+          fi
 
       - name: Print stack outputs
         run: |
