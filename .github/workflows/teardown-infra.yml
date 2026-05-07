@@ -69,9 +69,29 @@ jobs:
 
       - name: Empty S3 bucket
         run: |
-          echo "Removing all objects, versions, and delete markers from s3://$S3_BUCKET ..."
-          aws s3 rb s3://$S3_BUCKET --force --region $AWS_REGION || true
-          echo "Bucket removed."
+          echo "Purging all versions and delete markers from s3://$S3_BUCKET ..."
+
+          # Delete all object versions
+          VERSIONS=$(aws s3api list-object-versions \
+            --bucket $S3_BUCKET --region $AWS_REGION \
+            --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+            --output json 2>/dev/null || echo '{"Objects":[]}')
+          if [ "$(echo $VERSIONS | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["Objects"]))')" -gt 0 ]; then
+            aws s3api delete-objects --bucket $S3_BUCKET --delete "$VERSIONS" --region $AWS_REGION
+            echo "Versions deleted."
+          fi
+
+          # Delete all delete markers
+          MARKERS=$(aws s3api list-object-versions \
+            --bucket $S3_BUCKET --region $AWS_REGION \
+            --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
+            --output json 2>/dev/null || echo '{"Objects":[]}')
+          if [ "$(echo $MARKERS | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["Objects"]))')" -gt 0 ]; then
+            aws s3api delete-objects --bucket $S3_BUCKET --delete "$MARKERS" --region $AWS_REGION
+            echo "Delete markers removed."
+          fi
+
+          echo "Bucket emptied — ready for CloudFormation to delete."
 
       - name: Delete CloudFormation stack
         run: |
