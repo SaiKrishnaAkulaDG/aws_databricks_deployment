@@ -79,19 +79,19 @@ jobs:
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "cd /app && sudo git fetch origin && sudo git checkout ${{ github.ref_name }} && sudo git pull origin ${{ github.ref_name }} 2>&1"
 
-      - name: Rebuild Docker image
-        run: |
-          ssh -i /tmp/ec2-key.pem \
-            -o StrictHostKeyChecking=no \
-            ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "cd /app && sudo docker compose build pipeline 2>&1"
-
       - name: Ensure .env exists on EC2
         run: |
           ssh -i /tmp/ec2-key.pem \
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "[ -f /app/.env ] || sudo cp /app/.env.example /app/.env && echo '.env ready'"
+
+      - name: Rebuild Docker image
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            "cd /app && sudo docker compose build pipeline 2>&1"
 
       - name: Inject AWS credentials into .env
         run: |
