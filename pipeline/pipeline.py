@@ -542,39 +542,56 @@ def process_gold_step(uncomputed_weeks: list, run_id: str, run_log_buffer: RunLo
         weekly_completed = None
         weekly_finished = False
 
-        # Create schema-only placeholder on S3 so glob() checks in gold models succeed on first run.
+        # Create schema-only placeholders on S3 so read_parquet calls in gold models succeed on first run.
         daily_key = "gold/daily_summary/data.parquet"
         if not s3_key_exists(s3_bucket, daily_key):
-            atomic_parquet_put(s3_bucket, daily_key, pd.DataFrame({
-                'transaction_date': pd.Series(dtype='object'),
-                'total_transactions': pd.Series(dtype='int64'),
-                'total_signed_amount': pd.Series(dtype='float64'),
-                'transactions_by_type': pd.Series(dtype='object'),
-                'online_transactions': pd.Series(dtype='int64'),
-                'instore_transactions': pd.Series(dtype='int64'),
-                'total_unresolvable_transactions': pd.Series(dtype='int64'),
-                'total_unresolvable_amount': pd.Series(dtype='float64'),
-                '_computed_at': pd.Series(dtype='datetime64[ns]'),
-                '_pipeline_run_id': pd.Series(dtype='str'),
-                '_source_period_start': pd.Series(dtype='object'),
-                '_source_period_end': pd.Series(dtype='object'),
-            }))
+            _daily_schema = pa.schema([
+                pa.field('transaction_date', pa.date32()),
+                pa.field('total_transactions', pa.int64()),
+                pa.field('total_signed_amount', pa.float64()),
+                pa.field('online_transactions', pa.int64()),
+                pa.field('instore_transactions', pa.int64()),
+                pa.field('total_unresolvable_transactions', pa.int64()),
+                pa.field('total_unresolvable_amount', pa.float64()),
+                pa.field('_computed_at', pa.timestamp('ns')),
+                pa.field('_pipeline_run_id', pa.string()),
+                pa.field('_source_period_start', pa.date32()),
+                pa.field('_source_period_end', pa.date32()),
+            ])
+            atomic_parquet_put(s3_bucket, daily_key, pa.table(
+                {n: pa.array([], type=_daily_schema.field(n).type) for n in _daily_schema.names},
+                schema=_daily_schema
+            ))
 
         weekly_key = "gold/weekly_account_summary/data.parquet"
-        if not s3_key_exists(s3_bucket, weekly_key):
-            atomic_parquet_put(s3_bucket, weekly_key, pd.DataFrame({
-                'week_start_date': pd.Series(dtype='object'),
-                'week_end_date': pd.Series(dtype='object'),
-                'account_id': pd.Series(dtype='str'),
-                'total_purchases': pd.Series(dtype='int64'),
-                'avg_purchase_amount': pd.Series(dtype='float64'),
-                'total_payments': pd.Series(dtype='float64'),
-                'total_fees': pd.Series(dtype='float64'),
-                'total_interest': pd.Series(dtype='float64'),
-                'closing_balance': pd.Series(dtype='float64'),
-                '_computed_at': pd.Series(dtype='datetime64[ns]'),
-                '_pipeline_run_id': pd.Series(dtype='str'),
-            }))
+        _needs_weekly_placeholder = not s3_key_exists(s3_bucket, weekly_key)
+        if not _needs_weekly_placeholder:
+            try:
+                with duckdb.connect() as _conn:
+                    configure_duckdb_s3(_conn)
+                    _wc = _conn.execute(f"SELECT COUNT(*) FROM read_parquet('s3://{s3_bucket}/{weekly_key}')").fetchone()[0]
+                if _wc == 0:
+                    _needs_weekly_placeholder = True
+            except Exception:
+                pass
+        if _needs_weekly_placeholder:
+            _weekly_schema = pa.schema([
+                pa.field('week_start_date', pa.date32()),
+                pa.field('week_end_date', pa.date32()),
+                pa.field('account_id', pa.string()),
+                pa.field('total_purchases', pa.int64()),
+                pa.field('avg_purchase_amount', pa.float64()),
+                pa.field('total_payments', pa.float64()),
+                pa.field('total_fees', pa.float64()),
+                pa.field('total_interest', pa.float64()),
+                pa.field('closing_balance', pa.float64()),
+                pa.field('_computed_at', pa.timestamp('ns')),
+                pa.field('_pipeline_run_id', pa.string()),
+            ])
+            atomic_parquet_put(s3_bucket, weekly_key, pa.table(
+                {n: pa.array([], type=_weekly_schema.field(n).type) for n in _weekly_schema.names},
+                schema=_weekly_schema
+            ))
 
         for event in stream_dbt_layer("tag:gold", run_id, {"run_id": run_id, "target_weeks": target_weeks_json, "s3_bucket": s3_bucket}):
             if event.get("event") == "start" and event.get("model") == "gold_daily_summary":
