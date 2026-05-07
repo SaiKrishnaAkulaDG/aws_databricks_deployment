@@ -56,6 +56,13 @@ jobs:
             ParameterKey=KeyName,ParameterValue=cc-transactions-lake-key \
             ParameterKey=GitHubRepoURL,ParameterValue=https://github.com/${{ github.repository }}.git"
 
+          if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Stack is in ROLLBACK_COMPLETE — deleting before recreating..."
+            aws cloudformation delete-stack --stack-name cc-transactions-lake-stack --region us-east-1
+            aws cloudformation wait stack-delete-complete --stack-name cc-transactions-lake-stack --region us-east-1
+            STACK_STATUS="DOES_NOT_EXIST"
+          fi
+
           if [ "$STACK_STATUS" = "DOES_NOT_EXIST" ]; then
             echo "Creating new stack..."
             aws cloudformation create-stack \
