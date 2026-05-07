@@ -165,18 +165,18 @@ The GitHub Actions OIDC role used by all workflows.
 
 ### Update policy (if new permissions needed)
 ```bash
-# Get current policy document first
-aws iam get-policy-version \
+# 1. Check current versions (max 5 allowed; delete oldest non-default if at limit)
+aws iam list-policy-versions \
   --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
-  --version-id v6 \
   --profile DG4-Developer-065317679010
 
-# Create new version (max 5 versions — delete old ones if needed)
+# 2. Delete oldest non-default version if needed (e.g. v3)
 aws iam delete-policy-version \
   --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
-  --version-id v3 \
+  --version-id <OLDEST_VERSION> \
   --profile DG4-Developer-065317679010
 
+# 3. Create new default version from updated policy document
 aws iam create-policy-version \
   --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
   --policy-document file:///tmp/updated-policy.json \
@@ -241,8 +241,10 @@ aws s3 sync /app/data/gold     s3://cc-transaction-databricks-datalake-2026/gold
 aws s3 sync /app/data/pipeline s3://cc-transaction-databricks-datalake-2026/pipeline/
 ```
 
-### Update EC2_INSTANCE_ID secret after redeploy
-Every `deploy-infra` run creates a new EC2 instance with a new ID. Update the secret after each deploy:
+### Update EC2_INSTANCE_ID secret after teardown + redeploy
+A new EC2 instance is created when the stack is deleted and re-created (teardown + deploy). `update-stack` reuses the existing instance — no secret update needed in that case.
+
+After a fresh `deploy-infra` following a teardown:
 ```bash
 # Get new instance ID from CF outputs
 NEW_ID=$(aws cloudformation describe-stacks \
@@ -252,6 +254,28 @@ NEW_ID=$(aws cloudformation describe-stacks \
   --output text)
 
 echo $NEW_ID | gh secret set EC2_INSTANCE_ID
+echo "Updated EC2_INSTANCE_ID to $NEW_ID"
+```
+
+### Full redeploy sequence (after teardown)
+```bash
+# 1. Deploy infrastructure
+gh workflow run deploy-infra.yml --ref main
+
+# 2. Update EC2_INSTANCE_ID secret (new instance every time)
+NEW_ID=$(aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --region us-east-1 --profile DG4-Developer-065317679010 \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+echo $NEW_ID | gh secret set EC2_INSTANCE_ID
+
+# 3. Run historical pipeline to populate all 6 days
+gh workflow run run-pipeline.yml --ref main \
+  -f mode=historical -f start_date=2024-01-01 -f end_date=2024-01-06
+
+# 4. Run incremental for day 7
+gh workflow run run-pipeline.yml --ref main -f mode=incremental
 ```
 
 ---
@@ -270,6 +294,20 @@ echo $NEW_ID | gh secret set EC2_INSTANCE_ID
 | 8 | run-pipeline | EC2 had stale code | Added `git pull origin main` step before every pipeline run |
 | 9 | teardown-infra | `DELETE_FAILED` — S3 versioned objects | Replaced `s3 rm --recursive` with `s3api list-object-versions` + `delete-objects` |
 | 10 | All | Missing IAM permissions (6 actions) | Policy updated v1→v6: `UpdateStack`, `TerminateInstances`, `DeleteLogGroup`, `DeleteSecurityGroup`, `TagResource`, `RunInstances`, `CreateTags` |
+
+## Known Upcoming Maintenance
+
+| Item | Deadline | Action |
+|------|----------|--------|
+| Node.js 20 deprecated in GitHub Actions | 2026-06-02 (forced), 2026-09-16 (removed) | Bump `actions/checkout@v4` and `aws-actions/configure-aws-credentials@v4` to Node.js 24 compatible versions |
+
+To opt in early, add to each workflow under `env:`:
+```yaml
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+```
+
+---
 
 ## Validated Pipeline Results (2026-05-07)
 
