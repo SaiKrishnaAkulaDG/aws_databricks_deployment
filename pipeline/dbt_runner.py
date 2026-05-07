@@ -91,38 +91,47 @@ def stream_dbt_layer(tag: str, run_id: str, model_vars: dict):
         '--log-format', 'json'
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    all_lines = []
+    events_yielded = []
 
     for line in proc.stdout:
+        all_lines.append(line)
         try:
             event = json.loads(line)
             info_name = event.get('info', {}).get('name')
+            msg = event.get('info', {}).get('msg', '')
             if info_name == 'LogStartLine':
                 node_info = event.get('data', {}).get('node_info', {})
-                yield {
+                e = {
                     "event": "start",
                     "model": node_info.get('node_name'),
                     "started_at": node_info.get('node_started_at')
                 }
+                events_yielded.append(e)
+                yield e
             elif info_name == 'LogModelResult':
                 node_info = event.get('data', {}).get('node_info', {})
-                yield {
+                e = {
                     "event": "finish",
                     "model": node_info.get('node_name'),
                     "status": node_info.get('node_status'),
                     "started_at": node_info.get('node_started_at'),
                     "completed_at": node_info.get('node_finished_at')
                 }
-            elif info_name in ('GenericExceptionOnRun', 'LogModelError', 'PrintCancelLine',
-                               'RunningOperationCaughtError', 'RunningOperationUncaughtError'):
-                msg = event.get('info', {}).get('msg', '')
-                if msg:
-                    print(f"[dbt error] {info_name}: {msg}", flush=True)
+                events_yielded.append(e)
+                yield e
+            elif msg:
+                # Print any dbt message that isn't a structured start/finish event
+                print(f"[dbt] {info_name}: {msg}", flush=True)
         except (json.JSONDecodeError, KeyError, TypeError):
-            pass
+            if line.strip():
+                print(f"[dbt raw] {line.rstrip()}", flush=True)
 
     proc.wait()
-    stderr_output = proc.stderr.read().strip()
-    if stderr_output:
-        print(f"[dbt stderr] {stderr_output}", flush=True)
+    if proc.returncode != 0:
+        print(f"[dbt exit {proc.returncode}] Full output ({len(all_lines)} lines):", flush=True)
+        for l in all_lines[-40:]:
+            print(f"  {l.rstrip()}", flush=True)
     yield {"event": "exit", "returncode": proc.returncode}
