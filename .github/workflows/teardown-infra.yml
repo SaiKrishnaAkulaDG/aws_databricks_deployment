@@ -69,24 +69,50 @@ jobs:
 
       - name: Empty S3 bucket
         run: |
-          echo "Emptying s3://$S3_BUCKET ..."
-          aws s3 rm s3://$S3_BUCKET --recursive --region $AWS_REGION || true
-          echo "Bucket emptied."
+          echo "Removing all objects, versions, and delete markers from s3://$S3_BUCKET ..."
+          aws s3 rb s3://$S3_BUCKET --force --region $AWS_REGION || true
+          echo "Bucket removed."
 
       - name: Delete CloudFormation stack
         run: |
-          echo "Deleting stack $STACK_NAME ..."
-          aws cloudformation delete-stack \
+          STATUS=$(aws cloudformation describe-stacks \
             --stack-name $STACK_NAME \
-            --region $AWS_REGION
+            --query 'Stacks[0].StackStatus' \
+            --output text \
+            --region $AWS_REGION 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Stack status before delete: $STATUS"
+
+          if [ "$STATUS" = "DOES_NOT_EXIST" ]; then
+            echo "Stack already deleted."
+          elif [ "$STATUS" = "DELETE_FAILED" ]; then
+            echo "Stack is in DELETE_FAILED — retrying delete..."
+            aws cloudformation delete-stack \
+              --stack-name $STACK_NAME \
+              --region $AWS_REGION
+          else
+            echo "Deleting stack $STACK_NAME ..."
+            aws cloudformation delete-stack \
+              --stack-name $STACK_NAME \
+              --region $AWS_REGION
+          fi
 
       - name: Wait for stack deletion
         run: |
-          echo "Waiting for stack deletion (up to 20 minutes)..."
-          aws cloudformation wait stack-delete-complete \
+          STATUS=$(aws cloudformation describe-stacks \
             --stack-name $STACK_NAME \
-            --region $AWS_REGION
-          echo "Stack deleted."
+            --query 'Stacks[0].StackStatus' \
+            --output text \
+            --region $AWS_REGION 2>/dev/null || echo "DOES_NOT_EXIST")
+
+          if [ "$STATUS" = "DOES_NOT_EXIST" ]; then
+            echo "Stack already gone."
+          else
+            echo "Waiting for stack deletion (up to 20 minutes)..."
+            aws cloudformation wait stack-delete-complete \
+              --stack-name $STACK_NAME \
+              --region $AWS_REGION
+            echo "Stack deleted."
+          fi
 
       - name: Confirm deletion
         run: |
