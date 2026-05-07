@@ -128,11 +128,11 @@ def stream_dbt_layer(tag: str, run_id: str, model_vars: dict):
                 }
                 finish_events.append(fe)
                 yield fe
-            elif msg:
-                print(f"[dbt] {info_name}: {msg}", flush=True)
-            elif data:
-                # Print non-empty data payloads for unknown events
-                print(f"[dbt data] {info_name}: {json.dumps(data)[:300]}", flush=True)
+            else:
+                # Print everything else: msg if present, otherwise data
+                out = msg or json.dumps(data)[:400]
+                if out and out != '{}':
+                    print(f"[dbt] {info_name}: {out}", flush=True)
         except (json.JSONDecodeError, KeyError, TypeError):
             if line.strip():
                 print(f"[dbt raw] {line.rstrip()}", flush=True)
