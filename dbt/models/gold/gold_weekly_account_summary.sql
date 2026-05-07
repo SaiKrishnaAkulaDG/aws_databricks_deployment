@@ -38,11 +38,7 @@ WHERE false
 {% else %}
 
 {% set weekly_file = 's3://' ~ var('s3_bucket') ~ '/gold/weekly_account_summary/data.parquet' %}
-{% if execute %}
-  {% set file_exists = run_query("SELECT COUNT(*) FROM glob('" ~ weekly_file ~ "')").rows[0][0] > 0 %}
-{% else %}
-  {% set file_exists = false %}
-{% endif %}
+{% set file_exists = true %}
 
 WITH target_week_defs AS (
     {% for week in target_weeks_list %}

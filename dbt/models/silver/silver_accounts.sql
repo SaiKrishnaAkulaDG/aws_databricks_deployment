@@ -73,14 +73,10 @@ step3a_incoming_passing AS (
 ),
 
 step3b_existing AS (
+  -- pipeline.py always creates silver/accounts/data.parquet placeholder before running this model,
+  -- so the file is guaranteed to exist; no run_query glob check needed.
   {% set silver_file = 's3://' ~ var('s3_bucket') ~ '/silver/accounts/data.parquet' %}
-  {% if execute %}
-    {% set file_exists = run_query("SELECT COUNT(*) FROM glob('" ~ silver_file ~ "')").rows[0][0] > 0 %}
-  {% else %}
-    {% set file_exists = false %}
-  {% endif %}
 
-  {% if file_exists %}
   SELECT
     account_id,
     customer_name,
@@ -97,25 +93,6 @@ step3b_existing AS (
     0 AS _is_incoming
   FROM read_parquet('{{ silver_file }}')
   WHERE account_id NOT IN (SELECT account_id FROM step3a_incoming_passing)
-
-  UNION ALL
-  {% endif %}
-
-  SELECT
-    CAST(NULL AS VARCHAR) AS account_id,
-    CAST(NULL AS VARCHAR) AS customer_name,
-    CAST(NULL AS VARCHAR) AS account_status,
-    CAST(NULL AS DECIMAL) AS credit_limit,
-    CAST(NULL AS DECIMAL) AS current_balance,
-    CAST(NULL AS DATE) AS open_date,
-    CAST(NULL AS DATE) AS billing_cycle_start,
-    CAST(NULL AS DATE) AS billing_cycle_end,
-    CAST(NULL AS VARCHAR) AS _source_file,
-    CAST(NULL AS TIMESTAMP) AS _bronze_ingested_at,
-    CAST(NULL AS VARCHAR) AS _pipeline_run_id,
-    CAST(NULL AS TIMESTAMP) AS _record_valid_from,
-    0 AS _is_incoming
-  WHERE false
 ),
 
 step3c_unioned AS (
