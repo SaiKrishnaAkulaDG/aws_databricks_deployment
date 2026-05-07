@@ -68,7 +68,15 @@ class RunLogBuffer:
         Flush buffer to parquet on S3. Appends without overwriting (INV-19).
         On exception, writes buffer to local fallback .jsonl and re-raises.
         Clears buffer after flush (success or failure) to prevent re-append on subsequent calls.
+        If target_path is not an S3 URI, writes directly to local JSONL fallback.
         """
+        if not target_path.startswith("s3://"):
+            with open(target_path, "a") as f:
+                for entry in self._buffer:
+                    f.write(json.dumps(entry) + "\n")
+            self._buffer = []
+            return
+
         try:
             df_buffer = pd.DataFrame(self._buffer)
 
