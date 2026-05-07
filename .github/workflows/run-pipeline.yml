@@ -93,6 +93,23 @@ jobs:
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "[ -f /app/.env ] || sudo cp /app/.env.example /app/.env && echo '.env ready'"
 
+      - name: Inject AWS credentials into .env
+        run: |
+          ssh -i /tmp/ec2-key.pem \
+            -o StrictHostKeyChecking=no \
+            ubuntu@${{ steps.get-ip.outputs.ip }} \
+            'TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600") && \
+            ROLE=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/iam/security-credentials/") && \
+            CREDS=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE") && \
+            KEY_ID=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"AccessKeyId\"])") && \
+            SECRET=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"SecretAccessKey\"])") && \
+            TOKEN_VAL=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"Token\"])") && \
+            sudo sed -i "/^AWS_ACCESS_KEY_ID=/d; /^AWS_SECRET_ACCESS_KEY=/d; /^AWS_SESSION_TOKEN=/d" /app/.env && \
+            echo "AWS_ACCESS_KEY_ID=$KEY_ID" | sudo tee -a /app/.env > /dev/null && \
+            echo "AWS_SECRET_ACCESS_KEY=$SECRET" | sudo tee -a /app/.env > /dev/null && \
+            echo "AWS_SESSION_TOKEN=$TOKEN_VAL" | sudo tee -a /app/.env > /dev/null && \
+            echo "AWS credentials injected into .env"'
+
       - name: Run pipeline — incremental
         if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'incremental' }}
         run: |
@@ -120,10 +137,11 @@ jobs:
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "sudo docker compose -f /app/docker-compose.yml run --rm pipeline python -c \"
-          import duckdb
-          BUCKET = 'cc-transaction-databricks-datalake-2026'
+          import duckdb, os
+          from pipeline.s3_utils import configure_duckdb_s3
+          BUCKET = os.environ.get('S3_BUCKET', 'cc-transaction-databricks-datalake-2026')
           con = duckdb.connect()
-          con.execute(\\\"INSTALL httpfs; LOAD httpfs; SET s3_region='us-east-1'\\\")
+          configure_duckdb_s3(con)
           watermark = con.execute(\\\"SELECT last_processed_date FROM read_parquet('s3://\\\" + BUCKET + \\\"/pipeline/control.parquet')\\\").fetchone()[0]
           bronze   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('s3://\\\" + BUCKET + \\\"/bronze/transactions/**/*.parquet')\\\").fetchone()[0]
           silver   = con.execute(\\\"SELECT COUNT(*) FROM read_parquet('s3://\\\" + BUCKET + \\\"/silver/transactions/**/*.parquet')\\\").fetchone()[0]
