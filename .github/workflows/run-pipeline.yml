@@ -130,10 +130,14 @@ jobs:
           ssh -i /tmp/ec2-key.pem \
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "/home/ubuntu/.local/bin/aws s3 sync /app/data/bronze   s3://$S3_BUCKET/bronze/   --region $AWS_REGION &&
-             /home/ubuntu/.local/bin/aws s3 sync /app/data/silver   s3://$S3_BUCKET/silver/   --region $AWS_REGION &&
-             /home/ubuntu/.local/bin/aws s3 sync /app/data/gold     s3://$S3_BUCKET/gold/     --region $AWS_REGION &&
-             /home/ubuntu/.local/bin/aws s3 sync /app/data/pipeline s3://$S3_BUCKET/pipeline/ --region $AWS_REGION &&
+            "AWS_CMD=\$(which aws 2>/dev/null || echo /home/ubuntu/.local/bin/aws) &&
+             if [ ! -f \"\$AWS_CMD\" ] && [ \"\$AWS_CMD\" = '/home/ubuntu/.local/bin/aws' ]; then
+               pip install --quiet --user awscli && AWS_CMD=/home/ubuntu/.local/bin/aws
+             fi &&
+             \$AWS_CMD s3 sync /app/data/bronze   s3://$S3_BUCKET/bronze/   --region $AWS_REGION &&
+             \$AWS_CMD s3 sync /app/data/silver   s3://$S3_BUCKET/silver/   --region $AWS_REGION &&
+             \$AWS_CMD s3 sync /app/data/gold     s3://$S3_BUCKET/gold/     --region $AWS_REGION &&
+             \$AWS_CMD s3 sync /app/data/pipeline s3://$S3_BUCKET/pipeline/ --region $AWS_REGION &&
              echo 'S3 sync complete'"
 
       - name: Stop EC2 instance
