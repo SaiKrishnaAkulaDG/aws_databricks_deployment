@@ -17,16 +17,19 @@ def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection) -> None:
         conn.execute("INSTALL httpfs; LOAD httpfs;")
     conn.execute(f"SET s3_region='{region}';")
     # boto3 resolves credentials via EC2 instance role (IMDS reachable via
-    # network_mode: host + hop limit 2); inject into DuckDB since httpfs
-    # does not auto-resolve IMDS in DuckDB 0.10.0.
+    # network_mode: host + hop limit 2); inject into DuckDB (httpfs does not
+    # auto-resolve IMDS in 0.10.0) and into os.environ so dbt subprocesses inherit them.
     session = boto3.Session(region_name=region)
     creds = session.get_credentials()
     if creds:
         frozen = creds.get_frozen_credentials()
         conn.execute(f"SET s3_access_key_id='{frozen.access_key}';")
         conn.execute(f"SET s3_secret_access_key='{frozen.secret_key}';")
+        os.environ["AWS_ACCESS_KEY_ID"] = frozen.access_key
+        os.environ["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
         if frozen.token:
             conn.execute(f"SET s3_session_token='{frozen.token}';")
+            os.environ["AWS_SESSION_TOKEN"] = frozen.token
 
 
 def parse_s3_uri(uri: str) -> tuple:
