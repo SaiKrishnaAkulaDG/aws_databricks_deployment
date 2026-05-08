@@ -110,3 +110,49 @@ Historical pipeline (2024-01-01 → 2024-01-06) and incremental pipeline (2024-0
 
 **Signed:** Sai Krishna Akula  
 **Date:** 2026-05-07
+
+---
+
+# S09 Addendum — IMDS Credential Migration (2026-05-08)
+
+## Objective
+Replace `.env` credential injection with EC2 instance role resolved via IMDS inside Docker. IMDSv2 hop limit set to 2 (Docker bridge adds one extra hop); `network_mode: host` already in place.
+
+## Commits
+
+| # | Hash | Description |
+|---|------|-------------|
+| 18 | `84804ce` | Add S3-direct-writes runbook, PR description, and session log |
+| 19 | `5787dce` | Use EC2 instance role via IMDS instead of injected credentials |
+| 20 | `6967073` | Always refresh .env from .env.example on each run |
+| 21 | `572e042` | Restore boto3->DuckDB credential injection; boto3 now uses IMDS via host network |
+| 22 | `52a8fde` | Prune Docker builder cache before rebuild to fix snapshot corruption |
+| 23 | `cf3d0bb` | Export IMDS credentials to os.environ so dbt subprocesses inherit them |
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `Infra-AWS/cf-cc-transactions-lake.yaml` | `MetadataOptions: HttpPutResponseHopLimit: 2` added |
+| `pipeline/s3_utils.py` | `configure_duckdb_s3()` exports creds to `os.environ` in addition to DuckDB |
+| `dbt/profiles.yml` | Keeps `env_var()` refs — populated via os.environ at runtime |
+| `.github/workflows/run-pipeline.yml` | Removed "Inject credentials" step; `.env` always overwritten from `.env.example`; `docker builder prune -f` before build |
+
+## Problems Encountered
+
+| # | Problem | Commit |
+|---|---------|--------|
+| 9 | `400 Bad Request` — stale expired creds in `.env` from prior session | `6967073` |
+| 10 | HTTP 403 on DuckDB httpfs — DuckDB 0.10.0 does not auto-resolve IMDS | `572e042` |
+| 11 | dbt subprocess no S3 creds — `os.environ` not set | `cf3d0bb` |
+| 12 | Docker build exit 17 — BuildKit cache corruption | `52a8fde` |
+
+## GitHub Actions Run Results
+
+| Mode | Dates | Run ID | Result |
+|------|-------|--------|--------|
+| Historical | 2024-01-01 → 2024-01-06 | `25540595793` | ✅ Passed |
+| Incremental | 2024-01-07 | `25540903789` | ✅ Passed |
+
+**Signed:** Sai Krishna Akula  
+**Date:** 2026-05-08

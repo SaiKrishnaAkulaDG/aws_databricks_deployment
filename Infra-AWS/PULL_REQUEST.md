@@ -5,8 +5,8 @@
 Refactor the pipeline to write all outputs (bronze, silver, gold, control plane, run log) directly to S3 via DuckDB `httpfs` and `boto3`. Removes the local EBS data volume as a durable storage layer and eliminates the post-run `aws s3 sync` step from the GitHub Actions workflow.
 
 **Branch:** `feature/s3-direct-writes`  
-**Date:** 2026-05-07  
-**Validated via:** GitHub Actions runs `25492219411` (historical) and `25492672505` (incremental) — both passing.
+**Date:** 2026-05-08  
+**Validated via:** GitHub Actions runs `25540595793` (historical) and `25540903789` (incremental) — both passing.
 
 ---
 
@@ -61,13 +61,17 @@ All paths changed from `/app/data/...` to `s3://{{ var("s3_bucket") }}/...` in s
 - `boto3>=1.34.0`, `pyarrow>=14.0.0` added.
 
 ### `.env.example`
-- `S3_BUCKET`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` added.
+- `S3_BUCKET`, `AWS_DEFAULT_REGION` present. AWS credential vars removed — credentials are resolved at runtime via EC2 instance role, not `.env`.
 
 ### `.github/workflows/run-pipeline.yml`
-- "Ensure .env exists on EC2" moved **before** "Rebuild Docker image" — `docker compose build` reads `.env` at build time.
-- "Inject AWS credentials into .env" step added — fetches temporary credentials from EC2 IMDS via IMDSv2 and writes to `/app/.env`.
+- "Ensure .env exists on EC2" always overwrites from `.env.example` (previously only on missing file — stale expired credentials would persist across runs).
+- "Inject AWS credentials into .env" step **removed** — credentials flow: boto3 IMDS → DuckDB + `os.environ` → dbt subprocess.
+- `docker builder prune -f` added before every Docker build — prevents BuildKit cache corruption on long-running instances.
 - "Sync data to S3" step **removed** — data is written to S3 directly during the run.
 - "Verify pipeline outputs" step updated — queries S3 paths.
+
+### `Infra-AWS/cf-cc-transactions-lake.yaml`
+- `MetadataOptions: HttpPutResponseHopLimit: 2, HttpTokens: required, HttpEndpoint: enabled` added to EC2 instance — Docker bridge adds one extra network hop; default hop limit of 1 blocks IMDS access from inside containers.
 
 ---
 
@@ -82,7 +86,7 @@ All paths changed from `/app/data/...` to `s3://{{ var("s3_bucket") }}/...` in s
 
 ---
 
-## Problems Fixed During Validation (8 total)
+## Problems Fixed During Validation (12 total)
 
 | # | Problem | Fix |
 |---|---------|-----|
@@ -94,6 +98,10 @@ All paths changed from `/app/data/...` to `s3://{{ var("s3_bucket") }}/...` in s
 | 6 | `run_log.parquet` HTTP 404 not caught in `flush()` | `"404" in str(e)` added to exception check |
 | 7 | `run_log.parquet` HTTP 404 not caught in `check_unlogged_run()` | Same fix, second code path |
 | 8 | `gold_weekly` UNION ALL type mismatch | Same `pa.date32()` fix + stale check |
+| 9 | `400 Bad Request` on S3 HeadObject — stale expired credentials in `.env` | Always overwrite `.env` from `.env.example` on each run |
+| 10 | HTTP 403 on DuckDB httpfs after removing `.env` credential injection | Restored boto3→DuckDB credential injection; DuckDB 0.10.0 does not auto-resolve IMDS |
+| 11 | dbt subprocess had no S3 credentials — `silver_transaction_codes` ERROR | `configure_duckdb_s3()` now exports credentials to `os.environ`; dbt inherits via `env_var()` |
+| 12 | Docker build exit code 17 — BuildKit snapshot corruption | `docker builder prune -f` before every build |
 
 Full details: `Infra-AWS/S3_DIRECT_WRITES_TROUBLESHOOTING.md`
 
@@ -114,8 +122,8 @@ Full details: `Infra-AWS/S3_DIRECT_WRITES_TROUBLESHOOTING.md`
 
 | Mode | Dates | GitHub Actions Run | Result |
 |------|-------|--------------------|--------|
-| Historical | 2024-01-01 → 2024-01-06 | `25492219411` | ✅ Passed |
-| Incremental | 2024-01-07 | `25492672505` | ✅ Passed |
+| Historical | 2024-01-01 → 2024-01-06 | `25540595793` | ✅ Passed |
+| Incremental | 2024-01-07 | `25540903789` | ✅ Passed |
 
 Watermark after both runs: `2024-01-07`  
 S3 outputs confirmed: `bronze/`, `silver/`, `gold/`, `pipeline/`

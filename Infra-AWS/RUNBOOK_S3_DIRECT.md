@@ -75,30 +75,17 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-### Step 4 — Inject AWS credentials into `.env`
-
-SSH into EC2 and run this to populate credentials from IMDS:
+### Step 4 — Ensure `.env` is fresh
 
 ```bash
 ssh -i Infra-AWS/cc-transactions-lake-key.pem ubuntu@<EC2_IP>
 
 # On EC2:
-TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 3600")
-ROLE=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
-  "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
-CREDS=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
-  "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE")
-KEY_ID=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['AccessKeyId'])")
-SECRET=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['SecretAccessKey'])")
-TOKEN_VAL=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)['Token'])")
-
-sudo sed -i "/^AWS_ACCESS_KEY_ID=/d; /^AWS_SECRET_ACCESS_KEY=/d; /^AWS_SESSION_TOKEN=/d" /app/.env
-echo "AWS_ACCESS_KEY_ID=$KEY_ID" | sudo tee -a /app/.env > /dev/null
-echo "AWS_SECRET_ACCESS_KEY=$SECRET" | sudo tee -a /app/.env > /dev/null
-echo "AWS_SESSION_TOKEN=$TOKEN_VAL" | sudo tee -a /app/.env > /dev/null
-echo "Credentials injected."
+sudo cp /app/.env.example /app/.env
+echo ".env ready"
 ```
+
+No credential injection needed. `pipeline/s3_utils.py configure_duckdb_s3()` resolves credentials automatically via boto3 → EC2 instance role (IMDS reachable via `network_mode: host` + IMDSv2 hop limit 2). Credentials are also exported to `os.environ` so dbt subprocesses inherit them.
 
 ### Step 5 — Run Historical Pipeline (Days 1–6)
 
@@ -232,8 +219,10 @@ echo "$NEW_ID" | gh secret set EC2_INSTANCE_ID
 | Issue | Fix |
 |-------|-----|
 | Docker commands fail on EC2 | Prefix with `sudo` |
-| `.env not found` on fresh EC2 | `sudo cp /app/.env.example /app/.env` then run credential injection (Step 4) |
-| S3 write returns 403 | Re-run credential injection — IMDS tokens expire after 1 hour |
+| `.env not found` on fresh EC2 | `sudo cp /app/.env.example /app/.env` |
+| S3 write returns 403 | Check IAM instance role is attached; verify hop limit 2: `aws ec2 describe-instance-attribute --instance-id <ID> --attribute metadataOptions` |
+| S3 write returns 400 (Bad Request) | Stale expired credentials in `.env` — run `sudo cp /app/.env.example /app/.env` to clear them |
+| Docker build fails (exit code 17) | BuildKit cache corruption — run `sudo docker builder prune -f` then rebuild |
 | EC2 IP changed after restart | Re-fetch from CloudFormation outputs (Step 3) |
 | EC2 instance ID changed after redeploy | Run the "Update Instance ID Secret" command above |
 | `run_log.parquet` 404 on first run | Expected — handled automatically; pipeline creates the file on first flush |
@@ -253,4 +242,4 @@ echo "$NEW_ID" | gh secret set EC2_INSTANCE_ID
 
 ---
 
-**Last Updated:** 2026-05-07
+**Last Updated:** 2026-05-08

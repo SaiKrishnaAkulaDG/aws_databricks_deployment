@@ -305,12 +305,123 @@ _weekly_schema = pa.schema([
 
 ---
 
-## Final Passing Runs
+## Session 3 Final Passing Runs
 
 | Mode | Dates | GitHub Actions Run | Result |
 |------|-------|--------------------|--------|
 | Historical | 2024-01-01 → 2024-01-06 | `25492219411` | ✓ Passed |
 | Incremental | 2024-01-07 | `25492672505` | ✓ Passed |
+
+---
+
+# Session 4 — IMDS Credential Migration (2026-05-08)
+
+Migrated from injecting credentials into `.env` via IMDS curl to using the EC2 instance role directly via boto3 inside Docker. Four new problems surfaced.
+
+---
+
+## Problem 9 — `400 Bad Request` on S3 HeadObject (boto3)
+
+### Error
+```
+botocore.exceptions.ClientError: An error occurred (400) when calling the HeadObject operation: Bad Request
+```
+
+### Root Cause
+Previous session's "Inject AWS credentials into .env" step had written `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` to `/app/.env`. The "Ensure .env exists on EC2" step only ran `cp .env.example .env` when the file was **absent** — so the old file with expired credentials persisted. boto3 inside the container read the stale credentials from `.env` and sent them to S3 → 400.
+
+### Fix — `.github/workflows/run-pipeline.yml`
+Changed from conditional copy to unconditional overwrite:
+```yaml
+# Before (only copies if absent):
+"[ -f /app/.env ] || sudo cp /app/.env.example /app/.env"
+
+# After (always overwrites):
+"sudo cp /app/.env.example /app/.env"
+```
+
+**Commit:** `6967073`
+
+---
+
+## Problem 10 — HTTP 403 on DuckDB httpfs After Removing Credential Injection
+
+### Error
+```
+Error reading control.parquet: HTTP Error: HTTP GET error on
+'https://cc-transaction-databricks-datalake-2026.s3.amazonaws.com/pipeline/control.parquet' (HTTP 403)
+```
+
+### Root Cause
+`configure_duckdb_s3()` was updated to rely on DuckDB auto-resolving IMDS — but DuckDB 0.10.0 httpfs does **not** walk the AWS credential chain automatically. Without explicit `SET s3_access_key_id` commands, DuckDB makes unauthenticated S3 requests → 403.
+
+### Fix — `pipeline/s3_utils.py`
+Restored boto3→DuckDB credential injection. boto3 now resolves fresh credentials from IMDS (reachable via `network_mode: host` + hop limit 2) and passes them to DuckDB:
+```python
+session = boto3.Session(region_name=region)
+creds = session.get_credentials().get_frozen_credentials()
+conn.execute(f"SET s3_access_key_id='{frozen.access_key}';")
+conn.execute(f"SET s3_secret_access_key='{frozen.secret_key}';")
+if frozen.token:
+    conn.execute(f"SET s3_session_token='{frozen.token}';")
+```
+
+**Commit:** `572e042`
+
+---
+
+## Problem 11 — dbt Subprocess Has No S3 Credentials
+
+### Error
+```
+1 of 1 ERROR creating sql table model main.silver_transaction_codes [ERROR in 0.40s]
+ERROR in transaction codes step: silver_transaction_codes failed with status error
+```
+
+### Root Cause
+dbt runs as a subprocess. `configure_duckdb_s3()` injects credentials into the pipeline's own DuckDB connection but does not affect `os.environ`. `profiles.yml` uses `env_var('AWS_ACCESS_KEY_ID', '')` — since the env vars were blank (no `.env` injection anymore), dbt's DuckDB sessions had no S3 credentials.
+
+### Fix — `pipeline/s3_utils.py`
+After fetching boto3 credentials, also export them to `os.environ` so all subprocesses (dbt, etc.) inherit them:
+```python
+os.environ["AWS_ACCESS_KEY_ID"] = frozen.access_key
+os.environ["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
+if frozen.token:
+    os.environ["AWS_SESSION_TOKEN"] = frozen.token
+```
+
+**Commit:** `cf3d0bb`
+
+---
+
+## Problem 12 — Docker Build Exit Code 17 (BuildKit Snapshot Corruption)
+
+### Error
+```
+failed to solve: failed to prepare extraction snapshot "extract-...":
+parent snapshot sha256:... does not exist: not found
+exit code 17
+```
+
+### Root Cause
+Multiple run/cancel cycles left a corrupted BuildKit layer cache on the EC2 instance. Docker BuildKit couldn't find the parent snapshot for the new image layer.
+
+### Fix — `.github/workflows/run-pipeline.yml`
+Added `docker builder prune -f` before every build to clear the cache:
+```yaml
+"sudo docker builder prune -f && cd /app && sudo docker compose build pipeline 2>&1"
+```
+
+**Commit:** `52a8fde`
+
+---
+
+## Session 4 Final Passing Runs
+
+| Mode | Dates | GitHub Actions Run | Result |
+|------|-------|--------------------|--------|
+| Historical | 2024-01-01 → 2024-01-06 | `25540595793` | ✓ Passed |
+| Incremental | 2024-01-07 | `25540903789` | ✓ Passed |
 
 ---
 
