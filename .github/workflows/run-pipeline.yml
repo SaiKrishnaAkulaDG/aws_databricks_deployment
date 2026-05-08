@@ -93,23 +93,6 @@ jobs:
             ubuntu@${{ steps.get-ip.outputs.ip }} \
             "cd /app && sudo docker compose build pipeline 2>&1"
 
-      - name: Inject AWS credentials into .env
-        run: |
-          ssh -i /tmp/ec2-key.pem \
-            -o StrictHostKeyChecking=no \
-            ubuntu@${{ steps.get-ip.outputs.ip }} \
-            'TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600") && \
-            ROLE=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/iam/security-credentials/") && \
-            CREDS=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE") && \
-            KEY_ID=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"AccessKeyId\"])") && \
-            SECRET=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"SecretAccessKey\"])") && \
-            TOKEN_VAL=$(echo "$CREDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"Token\"])") && \
-            sudo sed -i "/^AWS_ACCESS_KEY_ID=/d; /^AWS_SECRET_ACCESS_KEY=/d; /^AWS_SESSION_TOKEN=/d" /app/.env && \
-            echo "AWS_ACCESS_KEY_ID=$KEY_ID" | sudo tee -a /app/.env > /dev/null && \
-            echo "AWS_SECRET_ACCESS_KEY=$SECRET" | sudo tee -a /app/.env > /dev/null && \
-            echo "AWS_SESSION_TOKEN=$TOKEN_VAL" | sudo tee -a /app/.env > /dev/null && \
-            echo "AWS credentials injected into .env"'
-
       - name: Run pipeline — incremental
         if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'incremental' }}
         run: |

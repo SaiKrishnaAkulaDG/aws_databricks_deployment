@@ -16,17 +16,8 @@ def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection) -> None:
     except Exception:
         conn.execute("INSTALL httpfs; LOAD httpfs;")
     conn.execute(f"SET s3_region='{region}';")
-
-    # Inject credentials from boto3's chain (env vars → ~/.aws → EC2 IMDS).
-    # DuckDB 0.10.0 httpfs does not reliably resolve IMDS inside Docker; boto3 does.
-    session = boto3.Session(region_name=region)
-    creds = session.get_credentials()
-    if creds:
-        frozen = creds.get_frozen_credentials()
-        conn.execute(f"SET s3_access_key_id='{frozen.access_key}';")
-        conn.execute(f"SET s3_secret_access_key='{frozen.secret_key}';")
-        if frozen.token:
-            conn.execute(f"SET s3_session_token='{frozen.token}';")
+    # Credentials resolved automatically via EC2 instance role (IMDS reachable via
+    # network_mode: host + hop limit 2 on the EC2 instance).
 
 
 def parse_s3_uri(uri: str) -> tuple:

@@ -147,6 +147,10 @@ Resources:
       SecurityGroupIds:
         - !Ref EC2SecurityGroup
       EbsOptimized: false
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
