@@ -1,0 +1,382 @@
+# GitHub Actions Workflows — Operations Guide (S3-Direct)
+
+**Last updated:** 2026-05-08 (v3 — IMDS credential migration complete)  
+**Repo:** `SaiKrishnaAkulaDG/aws_databricks_deployment`  
+**Branch:** `feature/s3-direct-writes`  
+**Region:** `us-east-1`
+
+> This guide covers the **S3-direct-writes** pipeline (branch `feature/s3-direct-writes`).  
+> For the original local-disk pipeline see `GITHUB_ACTIONS_GUIDE.md`.  
+> Key change: pipeline writes directly to S3 — no `aws s3 sync` step. Credentials flow via EC2 instance role (IMDS), not `.env`.
+
+---
+
+## Overview
+
+Three workflows manage the full lifecycle of the pipeline infrastructure:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `deploy-infra.yml` | Manual | Create or update the CloudFormation stack |
+| `run-pipeline.yml` | Daily 2 AM UTC + Manual | Start EC2, run pipeline, stop EC2 |
+| `teardown-infra.yml` | Manual (requires typing "DELETE") | Stop EC2, empty S3, delete CF stack |
+
+---
+
+## Required GitHub Secrets
+
+Set at: **GitHub repo → Settings → Secrets and variables → Actions**
+
+| Secret | Value | How to set |
+|--------|-------|------------|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::065317679010:role/cc-transactions-lake-github-role` | Copy ARN from IAM console |
+| `EC2_INSTANCE_ID` | `i-018df9bc857748709` | Get from CF stack output `EC2InstanceId` |
+| `EC2_SSH_KEY` | Contents of `Infra-AWS/cc-transactions-lake-key.pem` | See command below |
+
+### Set EC2_SSH_KEY from local PEM file
+```bash
+# From repo root — pipes file directly, avoids CRLF issues
+gh secret set EC2_SSH_KEY < Infra-AWS/cc-transactions-lake-key.pem
+```
+
+> **Warning:** Do NOT copy-paste the PEM content manually into the GitHub UI — Windows line endings (CRLF) will corrupt the key and cause `error in libcrypto` on SSH.
+
+---
+
+## Workflow 1 — Deploy Infrastructure
+
+**File:** `.github/workflows/deploy-infra.yml`  
+**Trigger:** Manual (`workflow_dispatch`)
+
+### What it does
+1. Validates the CloudFormation template
+2. Checks stack status:
+   - `DOES_NOT_EXIST` → `create-stack`
+   - `CREATE_COMPLETE` / `UPDATE_COMPLETE` → `update-stack`
+   - `ROLLBACK_COMPLETE` → auto-deletes and recreates
+   - No changes → prints "stack is up to date", skips wait
+3. Waits for operation to complete
+4. Prints stack outputs (EC2 IP, S3 paths, etc.)
+
+### Trigger via CLI
+```bash
+gh workflow run deploy-infra.yml --ref feature/s3-direct-writes
+```
+
+### Trigger with custom parameters
+```bash
+gh workflow run deploy-infra.yml --ref feature/s3-direct-writes \
+  -f s3_bucket_name=cc-transaction-databricks-datalake-2026 \
+  -f ec2_instance_type=t3.micro \
+  -f ebs_volume_size=5
+```
+
+### Get stack outputs after deploy
+```bash
+aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --query 'Stacks[0].Outputs' \
+  --output table \
+  --region us-east-1 \
+  --profile DG4-Developer-065317679010
+```
+
+---
+
+## Workflow 2 — Run Pipeline
+
+**File:** `.github/workflows/run-pipeline.yml`  
+**Trigger:** Schedule (daily 2 AM UTC) + Manual
+
+### What it does
+1. Starts EC2 instance
+2. Waits 60s for SSH to be ready
+3. Pulls latest code on EC2 (`git pull origin feature/s3-direct-writes`)
+4. **Always overwrites** `/app/.env` from `.env.example` on each run (prevents stale expired credentials)
+5. Prunes Docker BuildKit cache (`docker builder prune -f`) before rebuild — prevents snapshot corruption
+6. Rebuilds Docker image
+7. Runs pipeline (incremental or historical)
+8. Verifies outputs — queries S3 directly (no local paths)
+9. Stops EC2 (`if: always()` — runs even on failure)
+
+> **No "Sync data to S3" step** — pipeline writes directly to S3 during the run. No manual sync needed.
+
+### Trigger incremental (default)
+```bash
+gh workflow run run-pipeline.yml --ref feature/s3-direct-writes -f mode=incremental
+```
+
+### Trigger historical
+```bash
+gh workflow run run-pipeline.yml --ref feature/s3-direct-writes \
+  -f mode=historical \
+  -f start_date=2024-01-01 \
+  -f end_date=2024-01-06
+```
+
+### Check run status
+```bash
+# List recent runs
+gh run list --workflow=run-pipeline.yml --limit=5
+
+# Watch a specific run
+gh run view <RUN_ID>
+
+# Get logs for failed steps only
+gh run view --log-failed --job=<JOB_ID>
+```
+
+---
+
+## Workflow 3 — Teardown Infrastructure
+
+**File:** `.github/workflows/teardown-infra.yml`  
+**Trigger:** Manual only (requires typing `DELETE` to confirm)
+
+### What it does
+1. Checks stack exists
+2. Stops EC2 instance if running
+3. Purges all S3 object versions and delete markers (handles versioned bucket)
+4. Deletes CloudFormation stack
+5. Waits for deletion to complete
+
+### Trigger via CLI
+```bash
+gh workflow run teardown-infra.yml --ref feature/s3-direct-writes -f confirm=DELETE
+```
+
+> **Note:** This destroys all AWS resources. The S3 data and EC2 instance will be gone. Re-run `deploy-infra` + `run-pipeline` to restore.
+
+---
+
+## IAM Role — cc-transactions-lake-github-role
+
+The GitHub Actions OIDC role used by all workflows.
+
+| Item | Value |
+|------|-------|
+| Role name | `cc-transactions-lake-github-role` |
+| Role ARN | `arn:aws:iam::065317679010:role/cc-transactions-lake-github-role` |
+| Policy name | `cc-transactions-lake-github-policy` |
+| Policy version | `v6` (current) |
+| OIDC trust | `repo:SaiKrishnaAkulaDG/aws_databricks_deployment:*` |
+
+### Permissions granted (v6)
+
+| Service | Actions |
+|---------|---------|
+| **EC2** | RunInstances, StartInstances, StopInstances, TerminateInstances, Create/DeleteSecurityGroup, AuthorizeSecurityGroupIngress, CreateTags, Describe* |
+| **CloudFormation** | CreateStack, UpdateStack, DeleteStack, DescribeStacks, DescribeStackEvents, ValidateTemplate, GetTemplate, ListStackResources |
+| **S3** | CRUD + versioning + tagging on `cc-transaction-databricks-datalake-2026` |
+| **IAM** | Create/Delete Role, InstanceProfile, AttachPolicy — scoped to `cc-transactions-lake-*` |
+| **CloudWatch Logs** | CreateLogGroup, DeleteLogGroup, DescribeLogGroups, PutRetentionPolicy |
+
+### Update policy (if new permissions needed)
+```bash
+# 1. Check current versions (max 5 allowed; delete oldest non-default if at limit)
+aws iam list-policy-versions \
+  --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
+  --profile DG4-Developer-065317679010
+
+# 2. Delete oldest non-default version if needed (e.g. v3)
+aws iam delete-policy-version \
+  --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
+  --version-id <OLDEST_VERSION> \
+  --profile DG4-Developer-065317679010
+
+# 3. Create new default version from updated policy document
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::065317679010:policy/cc-transactions-lake-github-policy \
+  --policy-document file:///tmp/updated-policy.json \
+  --set-as-default \
+  --profile DG4-Developer-065317679010
+```
+
+---
+
+## Common Operations
+
+### Get EC2 public IP after deploy
+```bash
+aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --region us-east-1 \
+  --profile DG4-Developer-065317679010 \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstancePublicIP`].OutputValue' \
+  --output text
+```
+
+### SSH into EC2
+```bash
+ssh -i Infra-AWS/cc-transactions-lake-key.pem ubuntu@<EC2_IP>
+```
+
+### Start / Stop EC2 manually
+```bash
+# Start
+aws ec2 start-instances \
+  --instance-ids i-018df9bc857748709 \
+  --region us-east-1 \
+  --profile DG4-Developer-065317679010
+
+# Stop
+aws ec2 stop-instances \
+  --instance-ids i-018df9bc857748709 \
+  --region us-east-1 \
+  --profile DG4-Developer-065317679010
+```
+
+### Run pipeline manually on EC2
+```bash
+# Historical
+sudo docker compose run --rm pipeline \
+  python -m pipeline.pipeline --mode historical \
+  --start-date 2024-01-01 --end-date 2024-01-06
+
+# Incremental
+sudo docker compose run --rm pipeline \
+  python -m pipeline.pipeline --mode incremental
+```
+
+### Verify pipeline outputs (query S3 directly)
+```bash
+sudo docker compose run --rm pipeline python -c "
+import duckdb, os
+from pipeline.s3_utils import configure_duckdb_s3
+
+bucket = os.environ['S3_BUCKET']
+con = duckdb.connect()
+configure_duckdb_s3(con)
+
+wm   = con.execute(f\"SELECT last_processed_date FROM read_parquet('s3://{bucket}/pipeline/control.parquet')\").fetchone()[0]
+brnz = con.execute(f\"SELECT COUNT(*) FROM read_parquet('s3://{bucket}/bronze/transactions/**/*.parquet')\").fetchone()[0]
+silv = con.execute(f\"SELECT COUNT(*) FROM read_parquet('s3://{bucket}/silver/transactions/**/*.parquet')\").fetchone()[0]
+gd   = con.execute(f\"SELECT COUNT(*) FROM read_parquet('s3://{bucket}/gold/daily_summary/data.parquet')\").fetchone()[0]
+gw   = con.execute(f\"SELECT COUNT(*) FROM read_parquet('s3://{bucket}/gold/weekly_account_summary/data.parquet')\").fetchone()[0]
+rl   = con.execute(f\"SELECT COUNT(*) FROM read_parquet('s3://{bucket}/pipeline/run_log.parquet')\").fetchone()[0]
+
+print(f'Watermark:    {wm}')
+print(f'Bronze txns:  {brnz}')
+print(f'Silver txns:  {silv}')
+print(f'Gold daily:   {gd}')
+print(f'Gold weekly:  {gw}')
+print(f'Run log rows: {rl}')
+"
+```
+
+Or from local machine:
+```bash
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/gold/ \
+  --recursive --profile DG4-Developer-065317679010
+
+aws s3 ls s3://cc-transaction-databricks-datalake-2026/pipeline/ \
+  --recursive --profile DG4-Developer-065317679010
+```
+
+### Update EC2_INSTANCE_ID secret after teardown + redeploy
+A new EC2 instance is created when the stack is deleted and re-created. `update-stack` reuses the existing instance — no secret update needed in that case.
+
+After a fresh `deploy-infra` following a teardown:
+```bash
+NEW_ID=$(aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --region us-east-1 --profile DG4-Developer-065317679010 \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+
+echo $NEW_ID | gh secret set EC2_INSTANCE_ID
+echo "Updated EC2_INSTANCE_ID to $NEW_ID"
+```
+
+### Full redeploy sequence (after teardown)
+```bash
+# 1. Deploy infrastructure
+gh workflow run deploy-infra.yml --ref feature/s3-direct-writes
+
+# 2. Update EC2_INSTANCE_ID secret (new instance every time)
+NEW_ID=$(aws cloudformation describe-stacks \
+  --stack-name cc-transactions-lake-stack \
+  --region us-east-1 --profile DG4-Developer-065317679010 \
+  --query 'Stacks[0].Outputs[?OutputKey==`EC2InstanceId`].OutputValue' \
+  --output text)
+echo $NEW_ID | gh secret set EC2_INSTANCE_ID
+
+# 3. Run historical pipeline to populate all 6 days
+gh workflow run run-pipeline.yml --ref feature/s3-direct-writes \
+  -f mode=historical -f start_date=2024-01-01 -f end_date=2024-01-06
+
+# 4. Run incremental for day 7
+gh workflow run run-pipeline.yml --ref feature/s3-direct-writes -f mode=incremental
+```
+
+---
+
+## Credential Flow (S3-Direct)
+
+No AWS credentials are injected into `.env`. The full flow:
+
+```
+EC2 IAM Instance Role
+        ↓
+   boto3 (IMDS via network_mode: host + hop limit 2)
+        ↓
+configure_duckdb_s3() in pipeline/s3_utils.py
+        ↓
+   DuckDB httpfs SET commands   +   os.environ["AWS_*"]
+        ↓                                  ↓
+  DuckDB S3 reads/writes          dbt subprocess (env_var() in profiles.yml)
+```
+
+**Why explicit injection:** DuckDB 0.10.0 `httpfs` does NOT auto-resolve the EC2 IMDS credential chain. boto3 resolves credentials correctly, then passes them to DuckDB via `SET s3_access_key_id / s3_secret_access_key / s3_session_token`.
+
+**Why `os.environ`:** dbt runs as a subprocess of `pipeline.py`. Setting `os.environ` before launching dbt means dbt's DuckDB session inherits credentials via `env_var('AWS_ACCESS_KEY_ID', '')` in `dbt/profiles.yml`.
+
+**Why hop limit 2:** Docker bridge networking adds one extra network hop between the container and IMDS at `169.254.169.254`. Default hop limit of 1 drops the request after one hop. `HttpPutResponseHopLimit: 2` in the CF template (and set via `aws ec2 modify-instance-metadata-options` on live instances) allows IMDS to be reached from inside containers on both bridge and host networks.
+
+---
+
+## Bugs Fixed
+
+| # | Session | Workflow | Problem | Fix |
+|---|---------|----------|---------|-----|
+| 1 | S2 | deploy-infra | `create-stack` failed if stack already existed | Added create-or-update logic with stack status check |
+| 2 | S2 | deploy-infra | `ROLLBACK_COMPLETE` blocked re-deploy | Auto-delete and recreate on ROLLBACK_COMPLETE |
+| 3 | S2 | run-pipeline | SSH key `error in libcrypto` | Re-set `EC2_SSH_KEY` secret via `gh secret set < file` — copy-paste from UI adds CRLF |
+| 4 | S2 | run-pipeline | `EC2_INSTANCE_ID` stale after redeploy | Updated secret to new instance ID |
+| 5 | S2 | run-pipeline | `.env` missing on fresh EC2 | Added step to copy `.env.example → .env` |
+| 6 | S2 | run-pipeline | Source CSVs missing on EC2 | Fixed corrupt `.gitignore`, committed all `source/` CSV files |
+| 7 | S2 | run-pipeline | `aws` CLI not found on new EC2 | Workflow auto-detects path, installs via pip if missing |
+| 8 | S2 | run-pipeline | EC2 had stale code | Added `git pull` step before every pipeline run |
+| 9 | S2 | teardown-infra | `DELETE_FAILED` — S3 versioned objects | Replaced `s3 rm` with `s3api list-object-versions` + `delete-objects` |
+| 10 | S2 | All | Missing IAM permissions (6 actions) | Policy updated v1→v6 |
+| 11 | S4 | run-pipeline | `400 Bad Request` on S3 — stale expired creds in `.env` | "Ensure .env" step now always overwrites from `.env.example` (was only on absent file) |
+| 12 | S4 | run-pipeline | HTTP 403 on DuckDB httpfs — DuckDB 0.10.0 does not auto-resolve IMDS | Restored boto3→DuckDB credential injection in `configure_duckdb_s3()` |
+| 13 | S4 | run-pipeline | dbt subprocess had no S3 credentials | `configure_duckdb_s3()` now exports creds to `os.environ`; dbt inherits via `env_var()` |
+| 14 | S4 | run-pipeline | Docker build exit 17 — BuildKit snapshot corruption | `docker builder prune -f` added before every build |
+
+## Known Upcoming Maintenance
+
+| Item | Deadline | Action |
+|------|----------|--------|
+| Node.js 20 deprecated in GitHub Actions | 2026-06-02 (forced), 2026-09-16 (removed) | Bump `actions/checkout@v4` and `aws-actions/configure-aws-credentials@v4` to Node.js 24 compatible versions |
+
+To opt in early, add to each workflow under `env:`:
+```yaml
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+```
+
+---
+
+## Validated Pipeline Results
+
+| Session | Mode | Dates | GitHub Actions Run | Result |
+|---------|------|-------|--------------------|--------|
+| S2 (2026-05-07) | Historical | 2024-01-01 → 2024-01-06 | — | ✓ Passed |
+| S2 (2026-05-07) | Incremental | 2024-01-07 | — | ✓ Passed |
+| S3 (2026-05-07) | Historical | 2024-01-01 → 2024-01-06 | `25492219411` | ✓ Passed |
+| S3 (2026-05-07) | Incremental | 2024-01-07 | `25492672505` | ✓ Passed |
+| S4 (2026-05-08) | Historical | 2024-01-01 → 2024-01-06 | `25540595793` | ✓ Passed |
+| S4 (2026-05-08) | Incremental | 2024-01-07 | `25540903789` | ✓ Passed |
+
+Watermark after all runs: `2024-01-07`
