@@ -16,8 +16,17 @@ def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection) -> None:
     except Exception:
         conn.execute("INSTALL httpfs; LOAD httpfs;")
     conn.execute(f"SET s3_region='{region}';")
-    # Credentials resolved automatically via EC2 instance role (IMDS reachable via
-    # network_mode: host + hop limit 2 on the EC2 instance).
+    # boto3 resolves credentials via EC2 instance role (IMDS reachable via
+    # network_mode: host + hop limit 2); inject into DuckDB since httpfs
+    # does not auto-resolve IMDS in DuckDB 0.10.0.
+    session = boto3.Session(region_name=region)
+    creds = session.get_credentials()
+    if creds:
+        frozen = creds.get_frozen_credentials()
+        conn.execute(f"SET s3_access_key_id='{frozen.access_key}';")
+        conn.execute(f"SET s3_secret_access_key='{frozen.secret_key}';")
+        if frozen.token:
+            conn.execute(f"SET s3_session_token='{frozen.token}';")
 
 
 def parse_s3_uri(uri: str) -> tuple:
