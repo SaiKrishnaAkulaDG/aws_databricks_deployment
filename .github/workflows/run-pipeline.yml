@@ -91,7 +91,7 @@ jobs:
           ssh -i /tmp/ec2-key.pem \
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "cd /app && sudo docker compose build pipeline 2>&1"
+            "sudo docker builder prune -f && cd /app && sudo docker compose build pipeline 2>&1"
 
       - name: Run pipeline — incremental
         if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == 'incremental' }}
