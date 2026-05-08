@@ -84,7 +84,7 @@ jobs:
           ssh -i /tmp/ec2-key.pem \
             -o StrictHostKeyChecking=no \
             ubuntu@${{ steps.get-ip.outputs.ip }} \
-            "[ -f /app/.env ] || sudo cp /app/.env.example /app/.env && echo '.env ready'"
+            "sudo cp /app/.env.example /app/.env && echo '.env ready'"
 
       - name: Rebuild Docker image
         run: |
